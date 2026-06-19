@@ -1,5 +1,6 @@
 import hashlib
 import io
+import json
 import re
 from datetime import date
 from pathlib import Path
@@ -11,14 +12,21 @@ from database import (
     FILES_ROOT,
     add_document,
     add_document_file,
-    delete_document,
+    archive_documents,
     delete_document_file,
-    delete_documents,
     find_document_file_by_hash,
+    get_archived_documents,
+    get_audit_log,
     get_document_files,
     get_documents,
+    get_review_actions,
+    get_review_cases,
     init_db,
     reassign_document_files,
+    record_review_decision,
+    restore_document,
+    sync_review_cases,
+    update_document_details,
     update_document_status,
 )
 
@@ -417,13 +425,41 @@ def clean_text(value):
     return str(value).strip()
 
 
+def optional_date_value(value):
+    text_value = clean_text(value)
+    if not text_value:
+        return None
+    parsed = pd.to_datetime(text_value, errors="coerce")
+    if pd.isna(parsed):
+        return None
+    return parsed.date()
+
+
+def select_options_with_current(base_options, current_value):
+    current = clean_text(current_value)
+    options = [""] + [value for value in base_options if value]
+    if current and current not in options:
+        options.append(current)
+    return options, options.index(current) if current in options else 0
+
+
 def normalized_key(value):
     return clean_text(value).casefold()
 
 
-def make_document_key(document_number, revision):
+def make_document_key(
+    document_number,
+    title="",
+    revision="",
+    project="",
+    discipline="",
+):
+    """Identify a true duplicate within its project and discipline context."""
     return (
+        normalized_key(project),
+        normalized_key(discipline),
         normalized_key(document_number),
+        normalized_key(title),
         normalized_key(revision),
     )
 
@@ -433,9 +469,87 @@ def existing_document_keys(df):
         return set()
 
     return {
-        make_document_key(row["document_number"], row["revision"])
+        make_document_key(
+            row.get("document_number", ""),
+            row.get("title", ""),
+            row.get("revision", ""),
+            row.get("project", ""),
+            row.get("discipline", ""),
+        )
         for _, row in df.iterrows()
     }
+
+
+def make_record_signature(row):
+    """Compare the complete register metadata, not only the document identity."""
+    return tuple(normalized_key(row.get(column, "")) for column in CSV_COLUMNS)
+
+
+def existing_record_signatures(df):
+    if df.empty:
+        return set()
+    return {make_record_signature(row) for _, row in df.iterrows()}
+
+
+def revision_sort_key(value):
+    """Natural revision ordering for values such as P01, P02, C01, A and B."""
+    text_value = clean_text(value).upper()
+    if not text_value:
+        return ((-1, ""),)
+
+    tokens = re.findall(r"[A-Z]+|\d+", text_value)
+    if not tokens:
+        return ((1, text_value),)
+
+    return tuple(
+        (0, int(token)) if token.isdigit() else (1, token)
+        for token in tokens
+    )
+
+
+def revision_family_key(row):
+    return (
+        normalized_key(row.get("project", "")),
+        normalized_key(row.get("discipline", "")),
+        normalized_key(row.get("document_number", "")),
+        normalized_key(row.get("title", "")),
+    )
+
+
+def sort_revision_history(history):
+    if history.empty:
+        return history.copy()
+
+    working = history.copy()
+    working["_revision_sort"] = working["revision"].map(revision_sort_key)
+    working["_created_sort"] = working["created_date"].fillna("").astype(str)
+    working["_registered_sort"] = working["created_at"].fillna("").astype(str)
+    ordered_indices = sorted(
+        working.index,
+        key=lambda index: (
+            working.at[index, "_revision_sort"],
+            working.at[index, "_created_sort"],
+            working.at[index, "_registered_sort"],
+            int(working.at[index, "id"]),
+        ),
+        reverse=True,
+    )
+    working = working.loc[ordered_indices].copy()
+    working["revision_role"] = "Previous revision"
+    if not working.empty:
+        working.iloc[0, working.columns.get_loc("revision_role")] = "Current revision"
+    return working.drop(columns=["_revision_sort", "_created_sort", "_registered_sort"])
+
+
+def finding_key(issue_type, related_ids, detail=""):
+    raw = "|".join(
+        [
+            normalized_key(issue_type),
+            ",".join(str(value) for value in sorted({int(value) for value in related_ids})),
+            normalized_key(detail),
+        ]
+    )
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
 def normalize_column_name(column_name):
@@ -594,59 +708,130 @@ def find_missing_metadata(df):
 
 
 def find_exact_duplicates(df):
+    """True duplicates require matching project, discipline, number, title and revision."""
     if df.empty:
         return pd.DataFrame()
 
     working = df.copy()
-    working["_doc_key"] = working["document_number"].map(normalized_key)
-    working["_rev_key"] = working["revision"].map(normalized_key)
+    key_columns = {
+        "_project_key": "project",
+        "_discipline_key": "discipline",
+        "_doc_key": "document_number",
+        "_title_key": "title",
+        "_rev_key": "revision",
+    }
+    for key_column, source_column in key_columns.items():
+        working[key_column] = working[source_column].map(normalized_key)
 
+    duplicate_keys = list(key_columns.keys())
     duplicates = working[
-        working.duplicated(["_doc_key", "_rev_key"], keep=False)
+        working.duplicated(duplicate_keys, keep=False)
     ].copy()
 
     if duplicates.empty:
         return pd.DataFrame()
 
-    duplicates["duplicate_group"] = (
-        duplicates["_doc_key"] + " | " + duplicates["_rev_key"]
+    duplicates["duplicate_group"] = duplicates[duplicate_keys].astype(str).agg(" | ".join, axis=1)
+    return duplicates.drop(columns=duplicate_keys).sort_values(
+        ["project", "discipline", "document_number", "title", "revision", "id"]
     )
 
-    return duplicates.drop(columns=["_doc_key", "_rev_key"]).sort_values(
-        ["document_number", "revision", "id"]
-    )
+
+def find_metadata_conflicts(df):
+    """Find ambiguous records that must never be cleaned automatically."""
+    if df.empty:
+        return pd.DataFrame()
+
+    working = df.copy()
+    for column in ["project", "discipline", "document_number", "title", "revision"]:
+        working[f"_{column}_key"] = working[column].map(normalized_key)
+
+    conflicts = []
+
+    number_revision_keys = [
+        "_project_key",
+        "_discipline_key",
+        "_document_number_key",
+        "_revision_key",
+    ]
+    for _, group in working.groupby(number_revision_keys, dropna=False):
+        distinct_titles = {
+            normalized_key(value) for value in group["title"] if clean_text(value)
+        }
+        if len(group) > 1 and len(distinct_titles) > 1:
+            conflicts.append(
+                {
+                    "conflict_type": "Title conflict",
+                    "project": clean_text(group.iloc[0]["project"]),
+                    "discipline": clean_text(group.iloc[0]["discipline"]),
+                    "document_number": clean_text(group.iloc[0]["document_number"]),
+                    "revision": clean_text(group.iloc[0]["revision"]),
+                    "titles": " | ".join(sorted({clean_text(value) for value in group["title"]})),
+                    "related_document_ids": [int(value) for value in group["id"].tolist()],
+                }
+            )
+
+    title_revision_keys = [
+        "_project_key",
+        "_discipline_key",
+        "_title_key",
+        "_revision_key",
+    ]
+    for _, group in working.groupby(title_revision_keys, dropna=False):
+        distinct_numbers = {
+            normalized_key(value)
+            for value in group["document_number"]
+            if clean_text(value)
+        }
+        if len(group) > 1 and len(distinct_numbers) > 1:
+            conflicts.append(
+                {
+                    "conflict_type": "Document number conflict",
+                    "project": clean_text(group.iloc[0]["project"]),
+                    "discipline": clean_text(group.iloc[0]["discipline"]),
+                    "document_number": " | ".join(sorted({clean_text(value) for value in group["document_number"]})),
+                    "revision": clean_text(group.iloc[0]["revision"]),
+                    "titles": clean_text(group.iloc[0]["title"]),
+                    "related_document_ids": [int(value) for value in group["id"].tolist()],
+                }
+            )
+
+    return pd.DataFrame(conflicts)
 
 
 def find_revision_groups(df):
     if df.empty:
         return pd.DataFrame()
 
-    working = df.copy()
-    working["_doc_key"] = working["document_number"].map(normalized_key)
-    working["_rev_key"] = working["revision"].map(normalized_key)
-
     rows = []
+    working = df.copy()
+    working["_family_key"] = working.apply(revision_family_key, axis=1)
 
-    for _, group in working.groupby("_doc_key"):
-        distinct_revisions = sorted(
+    for _, group in working.groupby("_family_key"):
+        distinct_revisions = {
+            clean_text(value)
+            for value in group["revision"]
+            if clean_text(value) != ""
+        }
+        if len(distinct_revisions) <= 1:
+            continue
+
+        ordered = sort_revision_history(group)
+        current = ordered.iloc[0]
+        ordered_revisions = [clean_text(value) for value in ordered["revision"] if clean_text(value)]
+        rows.append(
             {
-                clean_text(value)
-                for value in group["revision"]
-                if clean_text(value) != ""
+                "project": clean_text(current["project"]),
+                "discipline": clean_text(current["discipline"]),
+                "document_number": clean_text(current["document_number"]),
+                "title": clean_text(current["title"]),
+                "revision_count": len(distinct_revisions),
+                "revisions": ", ".join(ordered_revisions),
+                "current_revision": clean_text(current["revision"]),
+                "current_created_date": clean_text(current["created_date"]),
+                "current_registered_date": clean_text(current["created_at"]),
             }
         )
-
-        if len(distinct_revisions) > 1:
-            latest = group.sort_values("id", ascending=False).iloc[0]
-            rows.append(
-                {
-                    "document_number": clean_text(latest["document_number"]),
-                    "title": clean_text(latest["title"]),
-                    "revision_count": len(distinct_revisions),
-                    "revisions": ", ".join(distinct_revisions),
-                    "latest_registered_revision": clean_text(latest["revision"]),
-                }
-            )
 
     return pd.DataFrame(rows)
 
@@ -828,116 +1013,191 @@ def find_invalid_statuses(df):
 def build_review_queue(df):
     queue = []
 
-    missing = find_missing_metadata(df)
-    for _, row in missing.iterrows():
+    def source_details(record_id):
+        match = df[df["id"] == int(record_id)]
+        if match.empty:
+            return {
+                "project": "",
+                "discipline": "",
+                "title": "",
+            }
+        row = match.iloc[0]
+        return {
+            "project": clean_text(row.get("project", "")),
+            "discipline": clean_text(row.get("discipline", "")),
+            "title": clean_text(row.get("title", "")),
+        }
+
+    def add_finding(
+        issue_type,
+        severity,
+        record_id,
+        related_ids,
+        document_number,
+        revision,
+        issue,
+        recommended_action,
+        detail="",
+        project="",
+        discipline="",
+        title="",
+    ):
+        details = source_details(record_id)
         queue.append(
             {
-                "severity": "Warning",
-                "record_id": int(row["id"]),
-                "document_number": row["document_number"],
-                "revision": row["revision"],
-                "issue": "Missing required metadata: " + row["missing_fields"],
-                "recommended_action": "Complete the missing register fields",
+                "issue_key": finding_key(issue_type, related_ids, detail),
+                "issue_type": issue_type,
+                "severity": severity,
+                "record_id": int(record_id),
+                "related_document_ids": sorted({int(value) for value in related_ids}),
+                "project": project or details["project"],
+                "discipline": discipline or details["discipline"],
+                "document_number": clean_text(document_number),
+                "title": title or details["title"],
+                "revision": clean_text(revision),
+                "issue": issue,
+                "recommended_action": recommended_action,
             }
+        )
+
+    missing = find_missing_metadata(df)
+    for _, row in missing.iterrows():
+        add_finding(
+            "Missing metadata",
+            "Warning",
+            row["id"],
+            [row["id"]],
+            row["document_number"],
+            row["revision"],
+            "Missing required metadata: " + row["missing_fields"],
+            "Review the document and complete or approve the missing fields",
+            detail=row["missing_fields"],
+            title=row["title"],
         )
 
     duplicates = find_exact_duplicates(df)
     if not duplicates.empty:
         for _, group in duplicates.groupby("duplicate_group"):
-            ranked = group.sort_values("id", ascending=True)
-            kept_id = int(ranked.iloc[0]["id"])
+            related_ids = [int(value) for value in group["id"].tolist()]
+            first = group.iloc[0]
+            add_finding(
+                "Exact duplicate",
+                "Critical",
+                related_ids[0],
+                related_ids,
+                first["document_number"],
+                first["revision"],
+                "Matching project, discipline, document number, title and revision were found",
+                "Compare the metadata and PDFs, add review comments, then approve or reject archiving",
+                project=clean_text(first["project"]),
+                discipline=clean_text(first["discipline"]),
+                title=clean_text(first["title"]),
+            )
 
-            # One finding for each extra copy. The retained record is not itself an error.
-            for _, row in ranked.iloc[1:].iterrows():
-                queue.append(
-                    {
-                        "severity": "Critical",
-                        "record_id": int(row["id"]),
-                        "document_number": clean_text(row["document_number"]),
-                        "revision": clean_text(row["revision"]),
-                        "issue": "Extra exact duplicate; one retained copy will be preserved",
-                        "recommended_action": "Review the cleanup plan and remove this extra copy",
-                    }
-                )
+    conflicts = find_metadata_conflicts(df)
+    if not conflicts.empty:
+        for _, conflict in conflicts.iterrows():
+            related_ids = conflict["related_document_ids"]
+            issue_type = clean_text(conflict["conflict_type"])
+            add_finding(
+                issue_type,
+                "Critical",
+                related_ids[0],
+                related_ids,
+                conflict["document_number"],
+                conflict["revision"],
+                f"{issue_type}: {clean_text(conflict['titles'])}",
+                "Inspect the document records and PDFs manually; no automatic cleanup is allowed",
+                project=clean_text(conflict["project"]),
+                discipline=clean_text(conflict["discipline"]),
+                title=clean_text(conflict["titles"]),
+            )
 
     overdue = find_overdue_documents(df)
     if not overdue.empty:
         for _, row in overdue.iterrows():
-            queue.append(
-                {
-                    "severity": "Warning",
-                    "record_id": int(row["id"]),
-                    "document_number": clean_text(row["document_number"]),
-                    "revision": clean_text(row["revision"]),
-                    "issue": f"Open record is {int(row['days_overdue'])} day(s) overdue",
-                    "recommended_action": "Confirm the status or revise the due date",
-                }
+            add_finding(
+                "Overdue open record",
+                "Warning",
+                row["id"],
+                [row["id"]],
+                row["document_number"],
+                row["revision"],
+                f"Open record is {int(row['days_overdue'])} day(s) overdue",
+                "Review the document status and due date, then record the decision",
             )
 
     date_issues = find_date_sequence_issues(df)
     if not date_issues.empty:
         for _, row in date_issues.iterrows():
-            queue.append(
-                {
-                    "severity": "Warning",
-                    "record_id": int(row["id"]),
-                    "document_number": clean_text(row["document_number"]),
-                    "revision": clean_text(row["revision"]),
-                    "issue": "Created date is later than due date",
-                    "recommended_action": "Correct the document dates",
-                }
+            add_finding(
+                "Date sequence issue",
+                "Warning",
+                row["id"],
+                [row["id"]],
+                row["document_number"],
+                row["revision"],
+                "Created date is later than due date",
+                "Inspect the dates and approve a correction or escalation",
             )
 
     filename_issues = find_filename_issues(df)
     if not filename_issues.empty:
         for _, row in filename_issues.iterrows():
-            queue.append(
-                {
-                    "severity": "Review",
-                    "record_id": int(row["id"]),
-                    "document_number": row["document_number"],
-                    "revision": row["revision"],
-                    "issue": row["issue"],
-                    "recommended_action": "Check the file-naming convention",
-                }
+            add_finding(
+                "Filename mismatch",
+                "Review",
+                row["id"],
+                [row["id"]],
+                row["document_number"],
+                row["revision"],
+                row["issue"],
+                "Compare the register metadata with the PDF and file-naming convention",
+                detail=row["issue"],
             )
 
     missing_pdfs = find_missing_pdf_records(df)
     if not missing_pdfs.empty:
         for _, row in missing_pdfs.iterrows():
-            queue.append(
-                {
-                    "severity": "Review",
-                    "record_id": int(row["id"]),
-                    "document_number": clean_text(row["document_number"]),
-                    "revision": clean_text(row["revision"]),
-                    "issue": "No PDF file is attached to this register record",
-                    "recommended_action": "Upload the controlled PDF in PDF library",
-                }
+            add_finding(
+                "Missing controlled PDF",
+                "Review",
+                row["id"],
+                [row["id"]],
+                row["document_number"],
+                row["revision"],
+                "No PDF file is attached to this register record",
+                "Verify whether a controlled PDF is required and record the review outcome",
             )
 
     invalid_statuses = find_invalid_statuses(df)
     if not invalid_statuses.empty:
         for _, row in invalid_statuses.iterrows():
-            queue.append(
-                {
-                    "severity": "Warning",
-                    "record_id": int(row["id"]),
-                    "document_number": clean_text(row["document_number"]),
-                    "revision": clean_text(row["revision"]),
-                    "issue": f"Unrecognised status: {clean_text(row['status'])}",
-                    "recommended_action": "Replace it with an approved status value",
-                }
+            add_finding(
+                "Invalid status",
+                "Warning",
+                row["id"],
+                [row["id"]],
+                row["document_number"],
+                row["revision"],
+                f"Unrecognised status: {clean_text(row['status'])}",
+                "Review the record and approve the correct controlled status",
+                detail=clean_text(row["status"]),
             )
 
     queue_df = pd.DataFrame(queue)
-
     if queue_df.empty:
         return pd.DataFrame(
             columns=[
+                "issue_key",
+                "issue_type",
                 "severity",
                 "record_id",
+                "related_document_ids",
+                "project",
+                "discipline",
                 "document_number",
+                "title",
                 "revision",
                 "issue",
                 "recommended_action",
@@ -946,7 +1206,7 @@ def build_review_queue(df):
 
     order = {"Critical": 0, "Warning": 1, "Review": 2}
     queue_df["_order"] = queue_df["severity"].map(order).fillna(9)
-    return queue_df.sort_values(["_order", "record_id"]).drop(columns="_order")
+    return queue_df.sort_values(["_order", "document_number", "revision"]).drop(columns="_order")
 
 
 def calculate_health_score(df, review_queue):
@@ -1177,6 +1437,28 @@ def build_record_choice_map(df):
     return choices
 
 
+def build_review_case_choice_map(cases_df):
+    choices = {}
+    for position, (_, row) in enumerate(cases_df.iterrows(), start=1):
+        label = (
+            f"{clean_text(row.get('issue_type', 'Review'))} · "
+            f"{clean_text(row.get('document_number', 'Document')) or 'Document not set'} · "
+            f"{clean_text(row.get('revision', '')) or 'No revision'} · "
+            f"{clean_text(row.get('status', 'Pending Review'))} · Case {position}"
+        )
+        choices[label] = int(row["id"])
+    return choices
+
+
+def decode_related_ids(value):
+    if isinstance(value, list):
+        return [int(item) for item in value]
+    try:
+        return [int(item) for item in json.loads(clean_text(value) or "[]")]
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return []
+
+
 def show_flash_message():
     flash = st.session_state.pop("flash_message", None)
     if not flash:
@@ -1196,10 +1478,18 @@ def show_flash_message():
 # -----------------------------
 
 documents_df = get_documents()
+all_documents_df = get_documents(include_archived=True)
+archived_documents_df = get_archived_documents()
 all_pdf_files_df = get_document_files()
 missing_pdf_df = find_missing_pdf_records(documents_df)
 review_queue_df = build_review_queue(documents_df)
+sync_review_cases(review_queue_df)
+review_cases_df = get_review_cases()
+open_review_cases_df = review_cases_df[
+    review_cases_df["status"] != "Resolved"
+].copy() if not review_cases_df.empty else pd.DataFrame()
 exact_duplicates_df = find_exact_duplicates(documents_df)
+metadata_conflicts_df = find_metadata_conflicts(documents_df)
 revision_groups_df = find_revision_groups(documents_df)
 overdue_df = find_overdue_documents(documents_df)
 health_score = calculate_health_score(documents_df, review_queue_df)
@@ -1232,6 +1522,7 @@ with st.sidebar:
             "PDF library",
             "Document register",
             "Quality review",
+            "Manual review",
             "Revision history",
             "Administration",
         ],
@@ -1243,7 +1534,7 @@ with st.sidebar:
     st.write(f"**{len(documents_df)}** stored records")
     st.write(f"**{len(all_pdf_files_df)}** PDF files")
     st.write(f"**{len(missing_pdf_df)}** records without PDF")
-    st.write(f"**{len(review_queue_df)}** review items")
+    st.write(f"**{len(open_review_cases_df)}** open review cases")
     st.write(f"**{health_score}/100** health score")
     st.caption("Local SQLite database and file library · Demo data only")
 
@@ -1264,7 +1555,7 @@ st.markdown(
             <span class="hero-badge">CSV import</span>
             <span class="hero-badge">PDF document library</span>
             <span class="hero-badge">Project + discipline folders</span>
-            <span class="hero-badge">Quality review queue</span>
+            <span class="hero-badge">Manual review + approval</span>
         </div>
     </div>
     """,
@@ -1301,7 +1592,7 @@ if page == "Dashboard":
             ("Stored records", len(documents_df), "All register rows", ""),
             ("Controlled PDF files", len(all_pdf_files_df), "Saved in the file library", ""),
             ("Records without PDF", len(missing_pdf_df), "Need a controlled file", "health-watch" if len(missing_pdf_df) else "health-good"),
-            ("Review queue", len(review_queue_df), "Open quality findings", ""),
+            ("Manual review", len(open_review_cases_df), "Open approval cases", ""),
             ("Register health", f"{health_score}/100", health_note, health_class),
         ]
     )
@@ -1313,16 +1604,27 @@ if page == "Dashboard":
 
         with left:
             st.subheader("Priority actions")
-            if review_queue_df.empty:
-                st.success("No rule-based quality findings are currently open.")
+            if open_review_cases_df.empty:
+                st.success("No manual review cases are currently open.")
             else:
                 display_table(
-                    review_queue_df.head(10),
+                    open_review_cases_df.head(10),
+                    columns=[
+                        "severity",
+                        "status",
+                        "issue_type",
+                        "document_number",
+                        "revision",
+                        "issue_summary",
+                        "recommended_action",
+                    ],
                     rename={
                         "severity": "Severity",
+                        "status": "Review Status",
+                        "issue_type": "Issue Type",
                         "document_number": "Document Number",
                         "revision": "Revision",
-                        "issue": "Issue",
+                        "issue_summary": "Issue",
                         "recommended_action": "Recommended Action",
                     },
                     height=390,
@@ -1423,6 +1725,15 @@ elif page == "Add document":
             placeholder="Add review comments, workflow notes or actions.",
         )
 
+        allow_possible_duplicate = st.checkbox(
+            "Allow this possible duplicate to be saved for manual review",
+            value=False,
+            help=(
+                "Use this only when another record has the same project, discipline, "
+                "document number, title and revision but the metadata or PDF needs comparison."
+            ),
+        )
+
         submitted = st.form_submit_button(
             "Save document",
             type="primary",
@@ -1462,17 +1773,38 @@ elif page == "Add document":
                 and created_date > due_date
             ):
                 st.error("Created Date cannot be later than Due Date.")
-            elif make_document_key(document_number, revision) in existing_document_keys(documents_df):
-                st.error(
-                    "This document number and revision already exist. Add a new revision or review the existing record."
-                )
             else:
-                add_document(new_document)
-                st.session_state["flash_message"] = (
-                    "success",
-                    "Document saved successfully. The form has been cleared.",
-                )
-                st.rerun()
+                possible_duplicate = make_document_key(
+                    document_number,
+                    title,
+                    revision,
+                    project,
+                    discipline,
+                ) in existing_document_keys(documents_df)
+                exact_same_metadata = make_record_signature(
+                    new_document
+                ) in existing_record_signatures(documents_df)
+
+                if exact_same_metadata:
+                    st.error(
+                        "An identical register row is already stored. No additional copy was created."
+                    )
+                elif possible_duplicate and not allow_possible_duplicate:
+                    st.error(
+                        "A record with the same project, discipline, document number, title and revision already exists. Tick the manual-review option only when the records genuinely need comparison."
+                    )
+                else:
+                    add_document(new_document)
+                    message = (
+                        "Possible duplicate saved and added to Manual review."
+                        if possible_duplicate
+                        else "Document saved successfully. The form has been cleared."
+                    )
+                    st.session_state["flash_message"] = (
+                        "success",
+                        message,
+                    )
+                    st.rerun()
 
 
 # -----------------------------
@@ -1533,10 +1865,18 @@ elif page == "Import CSV":
                 )
             else:
                 prepared_df = prepare_uploaded_register(raw_df)
-                prepared_df["_key"] = prepared_df.apply(
+                prepared_df["_identity_key"] = prepared_df.apply(
                     lambda row: make_document_key(
-                        row["document_number"], row["revision"]
+                        row["document_number"],
+                        row["title"],
+                        row["revision"],
+                        row["project"],
+                        row["discipline"],
                     ),
+                    axis=1,
+                )
+                prepared_df["_signature"] = prepared_df.apply(
+                    make_record_signature,
                     axis=1,
                 )
 
@@ -1548,49 +1888,67 @@ elif page == "Import CSV":
                 valid_rows = prepared_df.drop(index=invalid_rows.index).copy()
 
                 duplicate_inside_mask = valid_rows.duplicated(
-                    subset=["_key"], keep="first"
+                    subset=["_signature"], keep="first"
                 )
                 duplicate_inside_csv = valid_rows[duplicate_inside_mask].copy()
                 valid_rows = valid_rows[~duplicate_inside_mask].copy()
 
-                database_keys = existing_document_keys(documents_df)
-                already_exists_mask = valid_rows["_key"].isin(database_keys)
+                database_signatures = existing_record_signatures(documents_df)
+                already_exists_mask = valid_rows["_signature"].isin(database_signatures)
                 already_in_database = valid_rows[already_exists_mask].copy()
                 new_rows = valid_rows[~already_exists_mask].copy()
+
+                database_identity_keys = existing_document_keys(documents_df)
+                possible_duplicates = new_rows[
+                    new_rows["_identity_key"].isin(database_identity_keys)
+                ].copy()
 
                 render_metric_cards(
                     [
                         ("CSV rows", len(prepared_df), "Rows read from file", ""),
                         ("New records", len(new_rows), "Ready to import", "health-good" if len(new_rows) else ""),
-                        ("Already stored", len(already_in_database), "Skipped safely", ""),
-                        ("Repeated in CSV", len(duplicate_inside_csv), "Extra copies skipped", "health-watch" if len(duplicate_inside_csv) else ""),
+                        ("Already stored", len(already_in_database), "Identical rows skipped", ""),
+                        ("Possible duplicates", len(possible_duplicates), "Imported for manual review", "health-watch" if len(possible_duplicates) else ""),
+                        ("Repeated in CSV", len(duplicate_inside_csv), "Identical extra rows skipped", "health-watch" if len(duplicate_inside_csv) else ""),
                         ("Invalid rows", len(invalid_rows), "Missing number or title", "health-risk" if len(invalid_rows) else ""),
                     ]
                 )
 
                 st.subheader("Import preview")
                 display_table(
-                    prepared_df.drop(columns="_key"),
+                    prepared_df.drop(columns=["_identity_key", "_signature"]),
                     height=350,
                 )
 
                 with st.expander("Rows already stored", expanded=False):
                     if already_in_database.empty:
-                        st.success("No existing exact duplicates were found.")
+                        st.success("No identical stored rows were found.")
                     else:
-                        display_table(already_in_database.drop(columns="_key"), height=260)
+                        display_table(already_in_database.drop(columns=["_identity_key", "_signature"]), height=260)
 
                 with st.expander("Repeated rows inside the CSV", expanded=False):
                     if duplicate_inside_csv.empty:
-                        st.success("No repeated document number and revision combinations were found inside the CSV.")
+                        st.success("No completely identical repeated rows were found inside the CSV.")
                     else:
-                        display_table(duplicate_inside_csv.drop(columns="_key"), height=260)
+                        display_table(duplicate_inside_csv.drop(columns=["_identity_key", "_signature"]), height=260)
+
+                with st.expander("Possible duplicates requiring manual review", expanded=False):
+                    if possible_duplicates.empty:
+                        st.success("No incoming rows share an existing document identity with different metadata.")
+                    else:
+                        st.warning(
+                            "These rows have the same project, discipline, document number, title and revision as an existing record, but other metadata differs. They will be imported and sent to Manual review."
+                        )
+                        display_table(
+                            possible_duplicates.drop(columns=["_identity_key", "_signature"]),
+                            height=280,
+                        )
 
                 with st.expander("Invalid rows", expanded=False):
                     if invalid_rows.empty:
                         st.success("Every row has a document number and title.")
                     else:
-                        display_table(invalid_rows.drop(columns="_key"), height=260)
+                        display_table(invalid_rows.drop(columns=["_identity_key", "_signature"]), height=260)
 
                 if new_rows.empty:
                     st.info("There are no new valid records to import.")
@@ -1615,7 +1973,7 @@ elif page == "Import CSV":
 
                         st.session_state["flash_message"] = (
                             "success",
-                            f"{len(new_rows)} new document record(s) imported. Existing and repeated rows were skipped.",
+                            f"{len(new_rows)} new document record(s) imported. Identical stored and repeated rows were skipped; possible duplicate identities were imported for manual review.",
                         )
                         st.rerun()
 
@@ -2117,7 +2475,7 @@ elif page == "Document register":
 elif page == "Quality review":
     render_section_header(
         "Assistant quality review",
-        "The checks now separate true data-control problems from normal revision history. Use the review queue to decide what needs human attention.",
+        "Automated checks identify possible issues, but every decision is completed by a person with a reviewer name, approval decision and comments.",
     )
 
     duplicate_group_count = (
@@ -2133,17 +2491,17 @@ elif page == "Quality review":
     render_metric_cards(
         [
             ("Health score", f"{health_score}/100", "Rule-based register indicator", health_class),
-            ("Review queue", len(review_queue_df), "All findings", "health-watch" if len(review_queue_df) else "health-good"),
-            ("Exact duplicate groups", duplicate_group_count, "Same number + revision", "health-risk" if duplicate_group_count else "health-good"),
+            ("Detected findings", len(review_queue_df), "Synced to manual review", "health-watch" if len(review_queue_df) else "health-good"),
+            ("Exact duplicate groups", duplicate_group_count, "Same project + discipline + number + title + revision", "health-risk" if duplicate_group_count else "health-good"),
             ("Missing metadata", len(missing_df), "Records affected", "health-watch" if len(missing_df) else "health-good"),
             ("Overdue records", len(overdue_df), "Open and past due", "health-risk" if len(overdue_df) else "health-good"),
             ("Missing PDF files", len(missing_pdf_df), "Register rows without attachment", "health-watch" if len(missing_pdf_df) else "health-good"),
         ]
     )
 
-    st.subheader("Review queue")
+    st.subheader("Detected findings")
     if review_queue_df.empty:
-        st.success("No rule-based quality findings are currently open.")
+        st.success("No automated quality findings are currently open.")
     else:
         severity_filter = st.multiselect(
             "Filter by severity",
@@ -2167,8 +2525,8 @@ elif page == "Quality review":
 
     st.divider()
 
-    st.subheader("1. Exact duplicates — action required")
-    st.caption("Only records with the same document number and the same revision appear here.")
+    st.subheader("1. Exact duplicate candidates — manual approval required")
+    st.caption("Only records with matching project, discipline, document number, title and revision appear here. Nothing is archived automatically.")
     if exact_duplicates_df.empty:
         st.success("No exact duplicate document number and revision combinations were found.")
     else:
@@ -2177,7 +2535,7 @@ elif page == "Quality review":
             columns=DISPLAY_COLUMNS,
             height=320,
         )
-        st.info("Use Administration → Duplicate cleanup to remove the extra copies safely.")
+        st.info("Open Manual review to compare metadata and PDFs, add comments, and approve the outcome.")
 
     st.subheader("2. Revision history — information only")
     st.caption("A document number with different revisions is expected and is not treated as a duplicate error.")
@@ -2191,7 +2549,9 @@ elif page == "Quality review":
                 "title": "Title",
                 "revision_count": "Revision Count",
                 "revisions": "Registered Revisions",
-                "latest_registered_revision": "Latest Registered",
+                "current_revision": "Current Revision",
+                "current_created_date": "Current Created Date",
+                "current_registered_date": "Current Registered Date",
             },
             height=300,
         )
@@ -2261,61 +2621,530 @@ elif page == "Quality review":
 
 
 # -----------------------------
+# Manual review
+# -----------------------------
+
+elif page == "Manual review":
+    render_section_header(
+        "Manual document review",
+        "Inspect the affected records and PDFs, record a reviewer, add mandatory comments and approve the decision. The system never archives uncertain records automatically.",
+    )
+
+    if review_cases_df.empty:
+        st.success("No review cases have been created.")
+    else:
+        status_counts = review_cases_df["status"].value_counts()
+        render_metric_cards(
+            [
+                ("Pending", int(status_counts.get("Pending Review", 0)), "Awaiting a reviewer", "health-watch"),
+                ("Under review", int(status_counts.get("Under Review", 0)), "Review in progress", ""),
+                ("Correction required", int(status_counts.get("Correction Required", 0)), "Record needs an update", "health-risk"),
+                ("Escalated", int(status_counts.get("Escalated", 0)), "Further approval required", "health-risk"),
+                ("Resolved", int(status_counts.get("Resolved", 0)), "Decision and comments saved", "health-good"),
+            ]
+        )
+
+        filter_left, filter_middle, filter_right = st.columns(3)
+        with filter_left:
+            selected_statuses = st.multiselect(
+                "Review status",
+                sorted(review_cases_df["status"].dropna().astype(str).unique()),
+                default=[
+                    value
+                    for value in ["Pending Review", "Under Review", "Correction Required", "Escalated"]
+                    if value in set(review_cases_df["status"].astype(str))
+                ],
+            )
+        with filter_middle:
+            selected_issue_types = st.multiselect(
+                "Issue type",
+                sorted(review_cases_df["issue_type"].dropna().astype(str).unique()),
+            )
+        with filter_right:
+            selected_projects = st.multiselect(
+                "Project",
+                sorted(
+                    value
+                    for value in review_cases_df["project"].dropna().astype(str).unique()
+                    if clean_text(value)
+                ),
+            )
+
+        filtered_cases = review_cases_df.copy()
+        if selected_statuses:
+            filtered_cases = filtered_cases[filtered_cases["status"].isin(selected_statuses)]
+        if selected_issue_types:
+            filtered_cases = filtered_cases[filtered_cases["issue_type"].isin(selected_issue_types)]
+        if selected_projects:
+            filtered_cases = filtered_cases[filtered_cases["project"].isin(selected_projects)]
+
+        display_table(
+            filtered_cases,
+            columns=[
+                "severity",
+                "status",
+                "issue_type",
+                "project",
+                "discipline",
+                "document_number",
+                "title",
+                "revision",
+                "issue_summary",
+                "decision",
+                "reviewer",
+                "reviewed_at",
+            ],
+            rename={
+                "status": "Review Status",
+                "issue_type": "Issue Type",
+                "document_number": "Document Number",
+                "issue_summary": "Issue",
+                "reviewed_at": "Reviewed At",
+            },
+            height=420,
+        )
+
+        if filtered_cases.empty:
+            st.info("No review cases match the selected filters.")
+        else:
+            st.divider()
+            st.subheader("Review one case")
+            case_choices = build_review_case_choice_map(filtered_cases)
+            selected_case_label = st.selectbox("Select a review case", list(case_choices.keys()))
+            selected_case_id = case_choices[selected_case_label]
+            case_row = review_cases_df[review_cases_df["id"] == selected_case_id].iloc[0]
+            related_ids = decode_related_ids(case_row["related_document_ids"])
+            case_documents = all_documents_df[all_documents_df["id"].isin(related_ids)].copy()
+
+            detail_left, detail_right = st.columns([1.35, 1])
+            with detail_left:
+                st.markdown("#### Metadata comparison")
+                if case_documents.empty:
+                    st.warning("The linked register records are no longer available.")
+                else:
+                    comparison = case_documents.copy()
+                    comparison["archive_state"] = comparison["is_archived"].map(
+                        lambda value: "Archived" if int(value or 0) else "Active"
+                    )
+                    display_table(
+                        comparison,
+                        columns=[
+                            "project",
+                            "discipline",
+                            "document_number",
+                            "title",
+                            "revision",
+                            "status",
+                            "owner",
+                            "originator",
+                            "created_date",
+                            "due_date",
+                            "created_at",
+                            "file_name",
+                            "pdf_count",
+                            "archive_state",
+                            "notes",
+                        ],
+                        rename={
+                            "document_number": "Document Number",
+                            "created_date": "Created Date",
+                            "due_date": "Due Date",
+                            "created_at": "Registered Date",
+                            "file_name": "File Name",
+                            "pdf_count": "PDF Count",
+                            "archive_state": "Record State",
+                        },
+                        height=330,
+                    )
+
+            with detail_right:
+                st.markdown("#### Case information")
+                st.write(f"**Issue:** {clean_text(case_row['issue_summary'])}")
+                st.write(f"**Recommended action:** {clean_text(case_row['recommended_action'])}")
+                st.write(f"**Current status:** {clean_text(case_row['status'])}")
+                if clean_text(case_row.get("decision", "")):
+                    st.write(f"**Last decision:** {clean_text(case_row['decision'])}")
+                if clean_text(case_row.get("reviewer", "")):
+                    st.write(f"**Reviewer:** {clean_text(case_row['reviewer'])}")
+                if clean_text(case_row.get("comments", "")):
+                    st.write(f"**Comments:** {clean_text(case_row['comments'])}")
+
+            st.markdown("#### Related controlled PDFs")
+            if case_documents.empty:
+                st.info("No linked records are available for PDF comparison.")
+            else:
+                for entry_number, (_, document_row) in enumerate(case_documents.iterrows(), start=1):
+                    label = (
+                        f"Entry {entry_number}: {clean_text(document_row['document_number'])} · "
+                        f"{clean_text(document_row['revision']) or 'No revision'} · "
+                        f"{clean_text(document_row['title'])}"
+                    )
+                    with st.expander(label, expanded=False):
+                        files = get_document_files(document_id=int(document_row["id"]))
+                        render_attached_files(
+                            files,
+                            key_prefix=f"review_{selected_case_id}_{entry_number}",
+                            allow_delete=False,
+                        )
+
+            st.markdown("#### Correct document metadata")
+            st.caption(
+                "Use this only after checking the register entry and related PDF. "
+                "Every correction requires a reviewer name and comments and is written to the audit history."
+            )
+
+            if case_documents.empty:
+                st.info("No linked register record is available to correct.")
+            else:
+                correction_choices = build_record_choice_map(case_documents)
+                correction_label = st.selectbox(
+                    "Select the record that needs correction",
+                    list(correction_choices.keys()),
+                    key=f"correction_record_{selected_case_id}",
+                )
+                correction_document_id = correction_choices[correction_label]
+                correction_row = case_documents[
+                    case_documents["id"] == correction_document_id
+                ].iloc[0]
+
+                with st.expander("Open manual metadata editor", expanded=False):
+                    discipline_options, discipline_index = select_options_with_current(
+                        DISCIPLINE_OPTIONS, correction_row.get("discipline", "")
+                    )
+                    status_options, status_index = select_options_with_current(
+                        STATUS_OPTIONS, correction_row.get("status", "")
+                    )
+
+                    with st.form(
+                        f"manual_metadata_correction_{selected_case_id}_{correction_document_id}",
+                        border=True,
+                    ):
+                        edit_left, edit_right = st.columns(2)
+                        with edit_left:
+                            corrected_document_number = st.text_input(
+                                "Document Number *",
+                                value=clean_text(correction_row.get("document_number", "")),
+                            )
+                            corrected_title = st.text_input(
+                                "Document Title *",
+                                value=clean_text(correction_row.get("title", "")),
+                            )
+                            corrected_project = st.text_input(
+                                "Project",
+                                value=clean_text(correction_row.get("project", "")),
+                            )
+                            corrected_discipline = st.selectbox(
+                                "Discipline",
+                                discipline_options,
+                                index=discipline_index,
+                            )
+                            corrected_revision = st.text_input(
+                                "Revision",
+                                value=clean_text(correction_row.get("revision", "")),
+                            )
+                            corrected_status = st.selectbox(
+                                "Status",
+                                status_options,
+                                index=status_index,
+                            )
+
+                        with edit_right:
+                            corrected_owner = st.text_input(
+                                "Owner",
+                                value=clean_text(correction_row.get("owner", "")),
+                            )
+                            corrected_originator = st.text_input(
+                                "Originator",
+                                value=clean_text(correction_row.get("originator", "")),
+                            )
+                            corrected_created_date = st.date_input(
+                                "Created Date",
+                                value=optional_date_value(correction_row.get("created_date", "")),
+                            )
+                            corrected_due_date = st.date_input(
+                                "Due Date",
+                                value=optional_date_value(correction_row.get("due_date", "")),
+                            )
+                            corrected_file_name = st.text_input(
+                                "File Name",
+                                value=clean_text(correction_row.get("file_name", "")),
+                            )
+
+                        corrected_notes = st.text_area(
+                            "Notes",
+                            value=clean_text(correction_row.get("notes", "")),
+                            height=100,
+                        )
+                        correction_reviewer = st.text_input(
+                            "Correction completed by *",
+                            placeholder="Reviewer or document controller name",
+                        )
+                        correction_comments = st.text_area(
+                            "Correction comments *",
+                            placeholder="Explain what was changed, what was checked and why the correction was required.",
+                            height=110,
+                        )
+                        correction_confirmed = st.checkbox(
+                            "I checked the register entry and related document before applying this correction."
+                        )
+                        correction_submitted = st.form_submit_button(
+                            "Save corrected metadata",
+                            type="primary",
+                            use_container_width=True,
+                            disabled=not correction_confirmed,
+                        )
+
+                        if correction_submitted:
+                            if not clean_text(correction_reviewer):
+                                st.error("Reviewer name is required.")
+                            elif not clean_text(correction_comments):
+                                st.error("Correction comments are required.")
+                            elif not clean_text(corrected_document_number) or not clean_text(corrected_title):
+                                st.error("Document Number and Document Title are required.")
+                            else:
+                                corrected_values = {
+                                    "document_number": clean_text(corrected_document_number),
+                                    "title": clean_text(corrected_title),
+                                    "project": clean_text(corrected_project),
+                                    "discipline": clean_text(corrected_discipline),
+                                    "revision": clean_text(corrected_revision),
+                                    "status": clean_text(corrected_status),
+                                    "owner": clean_text(corrected_owner),
+                                    "originator": clean_text(corrected_originator),
+                                    "created_date": str(corrected_created_date) if corrected_created_date else "",
+                                    "due_date": str(corrected_due_date) if corrected_due_date else "",
+                                    "file_name": clean_text(corrected_file_name),
+                                    "notes": clean_text(corrected_notes),
+                                }
+                                changed = update_document_details(
+                                    correction_document_id,
+                                    corrected_values,
+                                    clean_text(correction_reviewer),
+                                    clean_text(correction_comments),
+                                    selected_case_id,
+                                )
+                                if changed:
+                                    st.session_state["flash_message"] = (
+                                        "success",
+                                        "The corrected metadata was saved. The review case remains open until a final decision is approved.",
+                                    )
+                                else:
+                                    st.session_state["flash_message"] = (
+                                        "info",
+                                        "No metadata values were changed.",
+                                    )
+                                st.rerun()
+
+            decision_options = [
+                "Start Review",
+                "Approved – No Change Required",
+                "Correction Required",
+                "Not a Duplicate",
+                "Escalated",
+                "Resolved After Correction",
+            ]
+            if clean_text(case_row["issue_type"]) == "Exact duplicate":
+                decision_options.insert(1, "Approved – Duplicate Archived")
+
+            with st.form(f"manual_review_form_{selected_case_id}", border=True):
+                reviewer = st.text_input(
+                    "Reviewer name *",
+                    placeholder="Enter the person completing the review",
+                )
+                decision = st.selectbox("Review decision *", decision_options)
+
+                retained_id = None
+                archive_ids = []
+                move_pdfs = False
+
+                if decision == "Approved – Duplicate Archived" and not case_documents.empty:
+                    record_choices = build_record_choice_map(case_documents)
+                    retained_label = st.selectbox(
+                        "Record to retain *",
+                        list(record_choices.keys()),
+                    )
+                    retained_id = record_choices[retained_label]
+                    archive_choices = {
+                        label: document_id
+                        for label, document_id in record_choices.items()
+                        if document_id != retained_id
+                    }
+                    selected_archive_labels = st.multiselect(
+                        "Duplicate copies to archive *",
+                        list(archive_choices.keys()),
+                        default=list(archive_choices.keys()),
+                    )
+                    archive_ids = [archive_choices[label] for label in selected_archive_labels]
+                    move_pdfs = st.checkbox(
+                        "Move PDF links from the archived copies to the retained record",
+                        value=False,
+                        help="Use this only after comparing the PDFs. Archived metadata and the review audit remain available.",
+                    )
+
+                comments = st.text_area(
+                    "Review comments *",
+                    placeholder="Explain what was checked, what was approved and why.",
+                    height=130,
+                )
+                submitted_review = st.form_submit_button(
+                    "Save review decision",
+                    type="primary",
+                    use_container_width=True,
+                )
+
+                if submitted_review:
+                    if not clean_text(reviewer):
+                        st.error("Reviewer name is required.")
+                    elif not clean_text(comments):
+                        st.error("Review comments are required for every decision.")
+                    elif decision == "Approved – Duplicate Archived" and (
+                        retained_id is None or not archive_ids
+                    ):
+                        st.error("Select one retained record and at least one duplicate copy to archive.")
+                    else:
+                        details = {
+                            "related_document_ids": related_ids,
+                            "retained_document_id": retained_id,
+                            "archived_document_ids": archive_ids,
+                            "pdf_links_moved": move_pdfs,
+                        }
+
+                        if decision == "Approved – Duplicate Archived":
+                            if move_pdfs:
+                                for source_id in archive_ids:
+                                    reassign_document_files(source_id, retained_id)
+                            archive_documents(
+                                archive_ids,
+                                clean_text(reviewer),
+                                clean_text(comments),
+                                selected_case_id,
+                            )
+                            case_status = "Resolved"
+                        elif decision == "Start Review":
+                            case_status = "Under Review"
+                        elif decision == "Correction Required":
+                            case_status = "Correction Required"
+                        elif decision == "Escalated":
+                            case_status = "Escalated"
+                        else:
+                            case_status = "Resolved"
+
+                        record_review_decision(
+                            selected_case_id,
+                            decision,
+                            case_status,
+                            clean_text(reviewer),
+                            clean_text(comments),
+                            details,
+                        )
+                        st.session_state["flash_message"] = (
+                            "success",
+                            "The manual review decision and comments were saved to the audit history.",
+                        )
+                        st.rerun()
+
+            action_history = get_review_actions(selected_case_id)
+            with st.expander("Review action history", expanded=False):
+                if action_history.empty:
+                    st.info("No decisions have been recorded for this case yet.")
+                else:
+                    display_table(
+                        action_history,
+                        columns=["action", "reviewer", "comments", "created_at"],
+                        rename={"created_at": "Action Date"},
+                        height=260,
+                    )
+
+
+# -----------------------------
 # Revision history
 # -----------------------------
 
 elif page == "Revision history":
     render_section_header(
         "Revision history",
-        "Review every registered version of a document number without treating valid revisions as duplicate errors.",
+        "Keep every legitimate revision and its metadata. The newest revision is highlighted as current while all previous revisions and dates remain visible.",
     )
 
     if documents_df.empty:
         st.info("No documents are available.")
     else:
-        document_numbers = sorted(
-            value
-            for value in documents_df["document_number"].dropna().astype(str).unique()
-            if clean_text(value)
+        families = {}
+        family_groups = documents_df.groupby(documents_df.apply(revision_family_key, axis=1))
+        for position, (_, group) in enumerate(family_groups, start=1):
+            representative = group.iloc[0]
+            label = (
+                f"{clean_text(representative['project']) or 'Project not set'} · "
+                f"{clean_text(representative['discipline']) or 'Discipline not set'} · "
+                f"{clean_text(representative['document_number'])} · "
+                f"{clean_text(representative['title'])}"
+            )
+            if label in families:
+                label = f"{label} · Family {position}"
+            families[label] = group.index.tolist()
+
+        selected_family_label = st.selectbox(
+            "Select a document by project, discipline, number and title",
+            list(families.keys()),
         )
-
-        selected_document = st.selectbox(
-            "Select a document number",
-            document_numbers,
-        )
-
-        history = documents_df[
-            documents_df["document_number"].map(normalized_key)
-            == normalized_key(selected_document)
-        ].sort_values("id", ascending=False)
-
+        history = documents_df.loc[families[selected_family_label]].copy()
+        history = sort_revision_history(history)
         current = history.iloc[0]
 
         render_metric_cards(
             [
-                ("Registered versions", len(history), "Rows for this document", ""),
-                ("Latest registered", clean_text(current["revision"]) or "Not set", "Based on latest database entry", ""),
-                ("Current status", clean_text(current["status"]) or "Not set", "Latest registered row", ""),
-                ("Owner", clean_text(current["owner"]) or "Not set", "Latest registered row", ""),
-                ("Project", clean_text(current["project"]) or "Not set", "Latest registered row", ""),
+                ("Registered revisions", len(history), "Current and previous versions", ""),
+                ("Current revision", clean_text(current["revision"]) or "Not set", "Highest registered revision", "health-good"),
+                ("Current status", clean_text(current["status"]) or "Not set", "Current revision metadata", ""),
+                ("Current created date", clean_text(current["created_date"]) or "Not set", "Revision-specific date", ""),
+                ("Current registered date", clean_text(current["created_at"]) or "Not set", "Database registration date", ""),
             ]
         )
 
         display_table(
             history,
-            columns=DISPLAY_COLUMNS,
+            columns=[
+                "revision_role",
+                "revision",
+                "status",
+                "created_date",
+                "due_date",
+                "created_at",
+                "owner",
+                "originator",
+                "file_name",
+                "pdf_count",
+                "notes",
+            ],
+            rename={
+                "revision_role": "Revision Role",
+                "created_date": "Created Date",
+                "due_date": "Due Date",
+                "created_at": "Registered Date",
+                "file_name": "File Name",
+                "pdf_count": "PDF Count",
+            },
             height=460,
         )
 
-        st.subheader("Attached PDF files")
-        history_files = all_pdf_files_df[
-            all_pdf_files_df["document_id"].isin(history["id"].tolist())
-        ].copy() if not all_pdf_files_df.empty else pd.DataFrame()
-        render_attached_files(
-            history_files,
-            key_prefix=f"revision_{safe_folder_name(selected_document)}",
-            allow_delete=False,
+        st.info(
+            "Previous revisions remain part of the controlled history. Only a manually approved duplicate copy can be archived."
         )
+
+        st.subheader("Attached PDF files by revision")
+        for entry_number, (_, document_row) in enumerate(history.iterrows(), start=1):
+            label = (
+                f"{clean_text(document_row['revision_role'])}: "
+                f"{clean_text(document_row['revision']) or 'No revision'} · "
+                f"{clean_text(document_row['created_date']) or 'Created date not set'}"
+            )
+            with st.expander(label, expanded=entry_number == 1):
+                files = get_document_files(document_id=int(document_row["id"]))
+                render_attached_files(
+                    files,
+                    key_prefix=f"revision_{entry_number}_{safe_folder_name(clean_text(document_row['document_number']))}",
+                    allow_delete=False,
+                )
 
 
 # -----------------------------
@@ -2325,90 +3154,24 @@ elif page == "Revision history":
 elif page == "Administration":
     render_section_header(
         "Register administration",
-        "Manage individual records and clean existing exact duplicates. Different revisions are never removed by duplicate cleanup.",
+        "Update active records, archive records with a named reviewer and comments, restore archived records and view the audit history. Permanent deletion is not available in the interface.",
     )
 
-    st.subheader("Duplicate cleanup")
     st.markdown(
         """
         <div class="notice notice-safe">
-            The cleanup checks only exact matches of <strong>Document Number + Revision</strong>.
-            It will not delete P01, P02 or other legitimate revision history.
+            Duplicate decisions are completed in <strong>Manual review</strong>. Records are archived only after a reviewer compares the metadata and PDFs and saves approval comments.
         </div>
         """,
         unsafe_allow_html=True,
     )
 
-    cleanup_strategy = st.selectbox(
-        "Which copy should be retained?",
-        [
-            "Keep most complete record (recommended)",
-            "Keep oldest record",
-            "Keep newest record",
-        ],
-    )
-
-    cleanup_plan = build_duplicate_cleanup_plan(documents_df, cleanup_strategy)
-
-    if cleanup_plan.empty:
-        st.success("No existing exact duplicates need cleaning.")
-    else:
-        st.warning(
-            f"The plan will keep one record per exact key and remove {len(cleanup_plan)} extra duplicate copy/copies."
-        )
-        display_table(
-            cleanup_plan,
-            rename={
-                "document_number": "Document Number",
-                "revision": "Revision",
-                "kept_title": "Kept Title",
-                "removed_title": "Removed Title",
-                "reason": "Decision Rule",
-            },
-            height=330,
-        )
-
-        st.download_button(
-            "Download cleanup plan",
-            data=cleanup_plan.drop(
-                columns=["keep_id", "remove_id"],
-                errors="ignore",
-            ).to_csv(index=False).encode("utf-8-sig"),
-            file_name="duplicate_cleanup_plan.csv",
-            mime="text/csv",
-        )
-
-        confirm_cleanup = st.checkbox(
-            "I reviewed the cleanup plan and understand that the listed duplicate copies will be deleted."
-        )
-
-        if st.button(
-            f"Remove {len(cleanup_plan)} duplicate copy/copies",
-            type="primary",
-            disabled=not confirm_cleanup,
-            use_container_width=True,
-        ):
-            for _, cleanup_row in cleanup_plan.iterrows():
-                reassign_document_files(
-                    int(cleanup_row["remove_id"]),
-                    int(cleanup_row["keep_id"]),
-                )
-            removed_count = delete_documents(cleanup_plan["remove_id"].tolist())
-            st.session_state["flash_message"] = (
-                "success",
-                f"Duplicate cleanup completed. {removed_count} extra record(s) were removed and legitimate revisions were preserved.",
-            )
-            st.rerun()
-
-    st.divider()
-    st.subheader("Manage one document")
-
+    st.subheader("Manage one active document")
     if documents_df.empty:
-        st.info("No documents are available to manage.")
+        st.info("No active documents are available to manage.")
     else:
         choices = build_record_choice_map(documents_df)
-
-        selected_label = st.selectbox("Select a record", list(choices.keys()))
+        selected_label = st.selectbox("Select an active record", list(choices.keys()))
         selected_id = choices[selected_label]
         selected_df = documents_df[documents_df["id"] == selected_id]
 
@@ -2419,53 +3182,269 @@ elif page == "Administration":
         render_attached_files(
             selected_files,
             key_prefix=f"admin_{selected_id}",
-            allow_delete=True,
+            allow_delete=False,
         )
 
-        action_left, action_right = st.columns(2)
-
+        action_left, action_right = st.columns([1.45, 1])
         with action_left:
-            with st.form("status_update_form"):
-                current_status = clean_text(selected_df.iloc[0]["status"])
-                default_status_index = (
-                    STATUS_OPTIONS.index(current_status)
-                    if current_status in STATUS_OPTIONS
-                    else 0
+            selected_row = selected_df.iloc[0]
+            administration_discipline_options, administration_discipline_index = (
+                select_options_with_current(
+                    DISCIPLINE_OPTIONS, selected_row.get("discipline", "")
                 )
-                new_status = st.selectbox(
-                    "Update status",
-                    STATUS_OPTIONS,
-                    index=default_status_index,
+            )
+            administration_status_options, administration_status_index = (
+                select_options_with_current(
+                    STATUS_OPTIONS, selected_row.get("status", "")
                 )
-                update_submitted = st.form_submit_button(
-                    "Save status",
+            )
+
+            with st.form(f"full_metadata_edit_{selected_id}", border=True):
+                st.markdown("#### Edit document details")
+                st.caption(
+                    "All changes require a named reviewer and comments and are recorded in the audit history."
+                )
+                edit_col_one, edit_col_two = st.columns(2)
+                with edit_col_one:
+                    administration_document_number = st.text_input(
+                        "Document Number *",
+                        value=clean_text(selected_row.get("document_number", "")),
+                    )
+                    administration_title = st.text_input(
+                        "Document Title *",
+                        value=clean_text(selected_row.get("title", "")),
+                    )
+                    administration_project = st.text_input(
+                        "Project",
+                        value=clean_text(selected_row.get("project", "")),
+                    )
+                    administration_discipline = st.selectbox(
+                        "Discipline",
+                        administration_discipline_options,
+                        index=administration_discipline_index,
+                    )
+                    administration_revision = st.text_input(
+                        "Revision",
+                        value=clean_text(selected_row.get("revision", "")),
+                    )
+                    administration_status = st.selectbox(
+                        "Status",
+                        administration_status_options,
+                        index=administration_status_index,
+                    )
+
+                with edit_col_two:
+                    administration_owner = st.text_input(
+                        "Owner",
+                        value=clean_text(selected_row.get("owner", "")),
+                    )
+                    administration_originator = st.text_input(
+                        "Originator",
+                        value=clean_text(selected_row.get("originator", "")),
+                    )
+                    administration_created_date = st.date_input(
+                        "Created Date",
+                        value=optional_date_value(selected_row.get("created_date", "")),
+                    )
+                    administration_due_date = st.date_input(
+                        "Due Date",
+                        value=optional_date_value(selected_row.get("due_date", "")),
+                    )
+                    administration_file_name = st.text_input(
+                        "File Name",
+                        value=clean_text(selected_row.get("file_name", "")),
+                    )
+
+                administration_notes = st.text_area(
+                    "Notes",
+                    value=clean_text(selected_row.get("notes", "")),
+                    height=100,
+                )
+                administration_reviewer = st.text_input("Changed by *")
+                administration_comments = st.text_area(
+                    "Change reason and comments *",
+                    placeholder="Explain what was changed, what was checked and why.",
+                    height=100,
+                )
+                administration_confirmed = st.checkbox(
+                    "I reviewed the selected register record before saving these changes."
+                )
+                administration_submitted = st.form_submit_button(
+                    "Save document details",
                     type="primary",
                     use_container_width=True,
+                    disabled=not administration_confirmed,
                 )
 
-                if update_submitted:
-                    update_document_status(selected_id, new_status)
+                if administration_submitted:
+                    if not clean_text(administration_reviewer):
+                        st.error("Reviewer name is required.")
+                    elif not clean_text(administration_comments):
+                        st.error("Change comments are required.")
+                    elif not clean_text(administration_document_number) or not clean_text(administration_title):
+                        st.error("Document Number and Document Title are required.")
+                    else:
+                        administration_updates = {
+                            "document_number": clean_text(administration_document_number),
+                            "title": clean_text(administration_title),
+                            "project": clean_text(administration_project),
+                            "discipline": clean_text(administration_discipline),
+                            "revision": clean_text(administration_revision),
+                            "status": clean_text(administration_status),
+                            "owner": clean_text(administration_owner),
+                            "originator": clean_text(administration_originator),
+                            "created_date": str(administration_created_date) if administration_created_date else "",
+                            "due_date": str(administration_due_date) if administration_due_date else "",
+                            "file_name": clean_text(administration_file_name),
+                            "notes": clean_text(administration_notes),
+                        }
+                        changed = update_document_details(
+                            selected_id,
+                            administration_updates,
+                            clean_text(administration_reviewer),
+                            clean_text(administration_comments),
+                        )
+                        st.session_state["flash_message"] = (
+                            "success" if changed else "info",
+                            "Document details updated and written to the audit history."
+                            if changed
+                            else "No metadata values were changed.",
+                        )
+                        st.rerun()
+
+        with action_right:
+            with st.form("manual_archive_form"):
+                st.markdown("#### Archive selected record")
+                archive_reviewer = st.text_input("Reviewer name *")
+                archive_comments = st.text_area(
+                    "Archive reason and comments *",
+                    placeholder="Explain why this active record should be archived.",
+                )
+                archive_confirmed = st.checkbox(
+                    "I reviewed the record and understand it will leave the active register but remain recoverable."
+                )
+                archive_submitted = st.form_submit_button(
+                    "Archive selected record",
+                    disabled=not archive_confirmed,
+                    use_container_width=True,
+                )
+                if archive_submitted:
+                    if not clean_text(archive_reviewer) or not clean_text(archive_comments):
+                        st.error("Reviewer name and archive comments are required.")
+                    else:
+                        archive_documents(
+                            [selected_id],
+                            clean_text(archive_reviewer),
+                            clean_text(archive_comments),
+                        )
+                        st.session_state["flash_message"] = (
+                            "success",
+                            "The selected record was archived and remains available in the audit history.",
+                        )
+                        st.rerun()
+
+    st.divider()
+    st.subheader("Archived records")
+    if archived_documents_df.empty:
+        st.info("No records are currently archived.")
+    else:
+        display_table(
+            archived_documents_df,
+            columns=[
+                "project",
+                "discipline",
+                "document_number",
+                "title",
+                "revision",
+                "status",
+                "created_date",
+                "created_at",
+                "archived_at",
+                "archived_by",
+                "archive_reason",
+                "pdf_count",
+            ],
+            rename={
+                "document_number": "Document Number",
+                "created_date": "Created Date",
+                "created_at": "Registered Date",
+                "archived_at": "Archived Date",
+                "archived_by": "Archived By",
+                "archive_reason": "Archive Reason",
+                "pdf_count": "PDF Count",
+            },
+            height=330,
+        )
+
+        archived_choices = build_record_choice_map(archived_documents_df)
+        selected_archived_label = st.selectbox(
+            "Select an archived record to restore",
+            list(archived_choices.keys()),
+        )
+        selected_archived_id = archived_choices[selected_archived_label]
+        with st.form("restore_archived_form"):
+            restore_reviewer = st.text_input("Restored by *")
+            restore_comments = st.text_area("Restoration comments *")
+            restore_submitted = st.form_submit_button(
+                "Restore selected record",
+                type="primary",
+                use_container_width=True,
+            )
+            if restore_submitted:
+                if not clean_text(restore_reviewer) or not clean_text(restore_comments):
+                    st.error("Reviewer name and restoration comments are required.")
+                else:
+                    restore_document(
+                        selected_archived_id,
+                        clean_text(restore_reviewer),
+                        clean_text(restore_comments),
+                    )
                     st.session_state["flash_message"] = (
                         "success",
-                        "Document status updated successfully.",
+                        "The archived record was restored to the active register.",
                     )
                     st.rerun()
 
-        with action_right:
-            st.markdown("#### Delete selected record")
-            confirm_delete = st.checkbox(
-                "I understand this removes the selected row from the register.",
-                key="confirm_single_delete",
+    st.divider()
+    st.subheader("Audit history")
+    audit_df = get_audit_log()
+    review_actions_df = get_review_actions()
+
+    audit_tab, review_tab = st.tabs(["Archive and restore events", "Review decisions"])
+    with audit_tab:
+        if audit_df.empty:
+            st.info("No archive or restoration events have been recorded.")
+        else:
+            display_table(
+                audit_df,
+                rename={
+                    "event_type": "Event",
+                    "document_number": "Document Number",
+                    "created_at": "Event Date",
+                },
+                height=330,
             )
 
-            if st.button(
-                "Delete selected record",
-                disabled=not confirm_delete,
-                use_container_width=True,
-            ):
-                delete_document(selected_id)
-                st.session_state["flash_message"] = (
-                    "success",
-                    "The selected document record was deleted.",
-                )
-                st.rerun()
+    with review_tab:
+        if review_actions_df.empty:
+            st.info("No manual review decisions have been recorded.")
+        else:
+            display_table(
+                review_actions_df,
+                columns=[
+                    "issue_type",
+                    "document_number",
+                    "revision",
+                    "action",
+                    "reviewer",
+                    "comments",
+                    "created_at",
+                ],
+                rename={
+                    "issue_type": "Issue Type",
+                    "document_number": "Document Number",
+                    "action": "Decision",
+                    "created_at": "Decision Date",
+                },
+                height=360,
+            )
