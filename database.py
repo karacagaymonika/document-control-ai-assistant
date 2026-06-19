@@ -176,6 +176,67 @@ def init_db():
             ON review_cases(status)
             """
         )
+
+        # Earlier versions incorrectly treated matching titles with different
+        # document numbers as a conflict. Different document numbers may
+        # represent completely separate controlled documents, so unresolved
+        # cases created only by that retired rule are closed automatically.
+        obsolete_cases = connection.execute(
+            """
+            SELECT id
+            FROM review_cases
+            WHERE issue_type = 'Document number conflict'
+              AND status IN (
+                  'Pending Review',
+                  'Under Review',
+                  'Correction Required',
+                  'Escalated'
+              )
+            """
+        ).fetchall()
+
+        for obsolete_case in obsolete_cases:
+            case_id = int(obsolete_case["id"])
+            reason = (
+                "Rule corrected: matching titles with different document numbers "
+                "are permitted and are not duplicate or conflict records."
+            )
+            connection.execute(
+                """
+                UPDATE review_cases
+                SET status = 'Closed – Rule Updated',
+                    decision = 'Not a Duplicate',
+                    reviewer = 'System rule update',
+                    comments = ?,
+                    reviewed_at = CURRENT_TIMESTAMP,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """,
+                (reason, case_id),
+            )
+            connection.execute(
+                """
+                INSERT INTO review_actions (
+                    case_id, action, reviewer, comments, details
+                )
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    case_id,
+                    'Case closed after validation-rule correction',
+                    'System rule update',
+                    reason,
+                    json.dumps(
+                        {
+                            'retired_issue_type': 'Document number conflict',
+                            'new_rule': (
+                                'Same titles with different document numbers are allowed.'
+                            ),
+                        }
+                    ),
+                ),
+            )
+
         connection.commit()
 
 

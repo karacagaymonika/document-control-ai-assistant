@@ -738,7 +738,15 @@ def find_exact_duplicates(df):
 
 
 def find_metadata_conflicts(df):
-    """Find ambiguous records that must never be cleaned automatically."""
+    """Flag only genuine identity conflicts that require manual review.
+
+    The same title may legitimately be used by several different documents.
+    Therefore, different document numbers are never treated as a conflict just
+    because the title and revision happen to match.
+
+    A title conflict exists only when the same project, discipline, document
+    number and revision are registered with different titles.
+    """
     if df.empty:
         return pd.DataFrame()
 
@@ -756,7 +764,9 @@ def find_metadata_conflicts(df):
     ]
     for _, group in working.groupby(number_revision_keys, dropna=False):
         distinct_titles = {
-            normalized_key(value) for value in group["title"] if clean_text(value)
+            normalized_key(value)
+            for value in group["title"]
+            if clean_text(value)
         }
         if len(group) > 1 and len(distinct_titles) > 1:
             conflicts.append(
@@ -766,33 +776,12 @@ def find_metadata_conflicts(df):
                     "discipline": clean_text(group.iloc[0]["discipline"]),
                     "document_number": clean_text(group.iloc[0]["document_number"]),
                     "revision": clean_text(group.iloc[0]["revision"]),
-                    "titles": " | ".join(sorted({clean_text(value) for value in group["title"]})),
-                    "related_document_ids": [int(value) for value in group["id"].tolist()],
-                }
-            )
-
-    title_revision_keys = [
-        "_project_key",
-        "_discipline_key",
-        "_title_key",
-        "_revision_key",
-    ]
-    for _, group in working.groupby(title_revision_keys, dropna=False):
-        distinct_numbers = {
-            normalized_key(value)
-            for value in group["document_number"]
-            if clean_text(value)
-        }
-        if len(group) > 1 and len(distinct_numbers) > 1:
-            conflicts.append(
-                {
-                    "conflict_type": "Document number conflict",
-                    "project": clean_text(group.iloc[0]["project"]),
-                    "discipline": clean_text(group.iloc[0]["discipline"]),
-                    "document_number": " | ".join(sorted({clean_text(value) for value in group["document_number"]})),
-                    "revision": clean_text(group.iloc[0]["revision"]),
-                    "titles": clean_text(group.iloc[0]["title"]),
-                    "related_document_ids": [int(value) for value in group["id"].tolist()],
+                    "titles": " | ".join(
+                        sorted({clean_text(value) for value in group["title"]})
+                    ),
+                    "related_document_ids": [
+                        int(value) for value in group["id"].tolist()
+                    ],
                 }
             )
 
@@ -2628,6 +2617,10 @@ elif page == "Manual review":
     render_section_header(
         "Manual document review",
         "Inspect the affected records and PDFs, record a reviewer, add mandatory comments and approve the decision. The system never archives uncertain records automatically.",
+    )
+
+    st.info(
+        "Document titles are not unique identifiers. Records with the same title but different document numbers are allowed and are not treated as conflicts. A title conflict is raised only when the same project, discipline, document number and revision have different titles."
     )
 
     if review_cases_df.empty:
