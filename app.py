@@ -105,7 +105,6 @@ QUALITY_FIELDS = [
 ]
 
 DISPLAY_COLUMNS = [
-    "id",
     "document_number",
     "title",
     "project",
@@ -856,7 +855,7 @@ def build_review_queue(df):
                         "record_id": int(row["id"]),
                         "document_number": clean_text(row["document_number"]),
                         "revision": clean_text(row["revision"]),
-                        "issue": f"Extra exact duplicate; record {kept_id} can be retained",
+                        "issue": "Extra exact duplicate; one retained copy will be preserved",
                         "recommended_action": "Review the cleanup plan and remove this extra copy",
                     }
                 )
@@ -992,6 +991,25 @@ def display_table(
 
     display_df = df.copy()
 
+    # Internal database identifiers are required behind the scenes, but should
+    # never be shown to users in dashboards, tables, exports or review views.
+    internal_id_columns = {
+        "id",
+        "record_id",
+        "document_id",
+        "file_id",
+        "keep_id",
+        "remove_id",
+    }
+    display_df = display_df.drop(
+        columns=[
+            column
+            for column in display_df.columns
+            if column in internal_id_columns
+        ],
+        errors="ignore",
+    )
+
     if columns:
         available = [column for column in columns if column in display_df.columns]
         display_df = display_df[available]
@@ -1100,6 +1118,63 @@ def render_attached_files(files_df, key_prefix, allow_delete=False):
                             f"PDF file {title} was removed.",
                         )
                         st.rerun()
+
+
+def build_record_choice_map(df):
+    """Create clear, unique record labels while keeping database IDs hidden."""
+    if df.empty:
+        return {}
+
+    sort_columns = [
+        column
+        for column in [
+            "document_number",
+            "revision",
+            "title",
+            "project",
+            "discipline",
+            "id",
+        ]
+        if column in df.columns
+    ]
+    ordered = df.sort_values(sort_columns).copy()
+
+    records = []
+    label_totals = {}
+
+    for _, row in ordered.iterrows():
+        document_number = clean_text(row.get("document_number", "")) or "Document number not set"
+        revision = clean_text(row.get("revision", "")) or "No revision"
+        title = clean_text(row.get("title", "")) or "Untitled document"
+        project = clean_text(row.get("project", ""))
+        discipline = clean_text(row.get("discipline", ""))
+
+        label_parts = [document_number, revision, title]
+
+        if project:
+            label_parts.append(project)
+
+        if discipline:
+            label_parts.append(discipline)
+
+        base_label = " · ".join(label_parts)
+        label_totals[base_label] = label_totals.get(base_label, 0) + 1
+        records.append((base_label, int(row["id"])))
+
+    seen_labels = {}
+    choices = {}
+
+    for base_label, internal_id in records:
+        seen_labels[base_label] = seen_labels.get(base_label, 0) + 1
+
+        if label_totals[base_label] > 1:
+            visible_label = f"{base_label} · Entry {seen_labels[base_label]}"
+        else:
+            visible_label = base_label
+
+        choices[visible_label] = internal_id
+
+    return choices
 
 
 def show_flash_message():
@@ -1245,7 +1320,6 @@ if page == "Dashboard":
                     review_queue_df.head(10),
                     rename={
                         "severity": "Severity",
-                        "record_id": "ID",
                         "document_number": "Document Number",
                         "revision": "Revision",
                         "issue": "Issue",
@@ -1270,7 +1344,6 @@ if page == "Dashboard":
         display_table(
             documents_df.head(8),
             columns=[
-                "id",
                 "document_number",
                 "title",
                 "revision",
@@ -1279,7 +1352,6 @@ if page == "Dashboard":
                 "due_date",
             ],
             rename={
-                "id": "ID",
                 "document_number": "Document Number",
                 "title": "Title",
                 "revision": "Revision",
@@ -1627,15 +1699,7 @@ elif page == "PDF library":
             if discipline_records.empty:
                 st.info("No register records match this Project and Discipline selection.")
             else:
-                record_choices = {
-                    (
-                        f"ID {int(row['id'])} · {clean_text(row['document_number'])} · "
-                        f"{clean_text(row['revision']) or 'No revision'} · {clean_text(row['title'])}"
-                    ): int(row["id"])
-                    for _, row in discipline_records.sort_values(
-                        ["document_number", "revision", "id"]
-                    ).iterrows()
-                }
+                record_choices = build_record_choice_map(discipline_records)
 
                 selected_record_label = st.selectbox(
                     "Register record",
@@ -1775,7 +1839,6 @@ elif page == "PDF library":
             else:
                 audit_df = discipline_records[
                     [
-                        "id",
                         "document_number",
                         "title",
                         "revision",
@@ -1789,7 +1852,6 @@ elif page == "PDF library":
                 )
                 audit_df = audit_df.rename(
                     columns={
-                        "id": "ID",
                         "document_number": "Document Number",
                         "title": "Title",
                         "revision": "Revision",
@@ -2044,7 +2106,7 @@ elif page == "Document register":
             )
         with export_col_2:
             st.caption(
-                f"Export includes {len(filtered)} filtered record(s). The internal database ID is not included."
+                f"Export includes {len(filtered)} filtered record(s) and the selected register fields."
             )
 
 
@@ -2095,7 +2157,6 @@ elif page == "Quality review":
             filtered_queue,
             rename={
                 "severity": "Severity",
-                "record_id": "ID",
                 "document_number": "Document Number",
                 "revision": "Revision",
                 "issue": "Issue",
@@ -2148,7 +2209,6 @@ elif page == "Quality review":
             display_table(
                 overdue_df,
                 columns=[
-                    "id",
                     "document_number",
                     "revision",
                     "title",
@@ -2167,7 +2227,6 @@ elif page == "Quality review":
             display_table(
                 date_issues_df,
                 columns=[
-                    "id",
                     "document_number",
                     "revision",
                     "created_date",
@@ -2189,7 +2248,6 @@ elif page == "Quality review":
             display_table(
                 missing_pdf_df,
                 columns=[
-                    "id",
                     "project",
                     "discipline",
                     "document_number",
@@ -2303,8 +2361,6 @@ elif page == "Administration":
             rename={
                 "document_number": "Document Number",
                 "revision": "Revision",
-                "keep_id": "Keep ID",
-                "remove_id": "Remove ID",
                 "kept_title": "Kept Title",
                 "removed_title": "Removed Title",
                 "reason": "Decision Rule",
@@ -2314,13 +2370,16 @@ elif page == "Administration":
 
         st.download_button(
             "Download cleanup plan",
-            data=cleanup_plan.to_csv(index=False).encode("utf-8-sig"),
+            data=cleanup_plan.drop(
+                columns=["keep_id", "remove_id"],
+                errors="ignore",
+            ).to_csv(index=False).encode("utf-8-sig"),
             file_name="duplicate_cleanup_plan.csv",
             mime="text/csv",
         )
 
         confirm_cleanup = st.checkbox(
-            "I reviewed the cleanup plan and understand that the listed Remove IDs will be deleted."
+            "I reviewed the cleanup plan and understand that the listed duplicate copies will be deleted."
         )
 
         if st.button(
@@ -2347,10 +2406,7 @@ elif page == "Administration":
     if documents_df.empty:
         st.info("No documents are available to manage.")
     else:
-        choices = {
-            f"ID {int(row['id'])} · {clean_text(row['document_number'])} · {clean_text(row['revision']) or 'No revision'} · {clean_text(row['title'])}": int(row["id"])
-            for _, row in documents_df.iterrows()
-        }
+        choices = build_record_choice_map(documents_df)
 
         selected_label = st.selectbox("Select a record", list(choices.keys()))
         selected_id = choices[selected_label]
@@ -2391,7 +2447,7 @@ elif page == "Administration":
                     update_document_status(selected_id, new_status)
                     st.session_state["flash_message"] = (
                         "success",
-                        f"Status updated for record ID {selected_id}.",
+                        "Document status updated successfully.",
                     )
                     st.rerun()
 
@@ -2410,6 +2466,6 @@ elif page == "Administration":
                 delete_document(selected_id)
                 st.session_state["flash_message"] = (
                     "success",
-                    f"Record ID {selected_id} was deleted.",
+                    "The selected document record was deleted.",
                 )
                 st.rerun()
