@@ -1,0 +1,16 @@
+﻿venv/
+__pycache__/
+*.pyc
+.env
+document_control.db
+document_control_*backup*.db
+document_files/
+document_files_working_backup/
+test_backups/
+
+# Local testing files
+TestPack500/
+
+# Old application backups
+app_backup.py
+app_before_*.py
