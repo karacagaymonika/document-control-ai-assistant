@@ -14,3 +14,5 @@ TestPack500/
 # Old application backups
 app_backup.py
 app_before_*.py
+
+venv_broken/

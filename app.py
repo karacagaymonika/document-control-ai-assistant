@@ -21,12 +21,16 @@ from database import (
     get_documents,
     get_review_actions,
     get_review_cases,
+    get_register_comparison_items,
+    get_register_comparisons,
     init_db,
     reassign_document_files,
     record_review_decision,
     restore_document,
     sync_review_cases,
+    create_register_comparison,
     update_document_details,
+    update_register_comparison_item_review,
     update_document_status,
 )
 
@@ -65,6 +69,28 @@ CSV_COLUMNS = [
     "file_name",
     "notes",
 ]
+
+COMPARISON_METADATA_FIELDS = [
+    "title",
+    "revision",
+    "status",
+    "owner",
+    "originator",
+    "created_date",
+    "due_date",
+    "file_name",
+    "notes",
+]
+
+COMPARISON_DECISIONS = [
+    "Approved – Register A accepted",
+    "Approved – Register B accepted",
+    "Approved – Both records valid",
+    "Correction Required",
+    "Escalated",
+    "No Action Required",
+]
+
 
 STATUS_OPTIONS = [
     "Draft",
@@ -616,6 +642,380 @@ def prepare_uploaded_register(uploaded_df):
 
     prepared_df.insert(0, "csv_row", range(2, len(prepared_df) + 2))
     return prepared_df
+
+
+
+def comparison_identity_key(row):
+    """Match the same controlled document across two registers."""
+    return (
+        normalized_key(row.get("project", "")),
+        normalized_key(row.get("discipline", "")),
+        normalized_key(row.get("document_number", "")),
+    )
+
+
+def comparison_record(row):
+    return {
+        column: clean_text(row.get(column, ""))
+        for column in CSV_COLUMNS
+    }
+
+
+def comparison_history_records(group):
+    if group is None or group.empty:
+        return []
+
+    working = group.copy()
+    working["_created_date"] = pd.to_datetime(
+        working["created_date"], errors="coerce"
+    )
+    working["_revision_sort"] = working["revision"].map(revision_sort_key)
+    ordered_indices = sorted(
+        working.index,
+        key=lambda index: (
+            working.at[index, "_created_date"].timestamp()
+            if pd.notna(working.at[index, "_created_date"])
+            else float("-inf"),
+            working.at[index, "_revision_sort"],
+            int(working.at[index, "csv_row"]),
+        ),
+        reverse=True,
+    )
+    ordered = working.loc[ordered_indices]
+    return [comparison_record(row) for _, row in ordered.iterrows()]
+
+
+def select_comparison_current_row(group):
+    history = comparison_history_records(group)
+    return history[0] if history else {}
+
+
+def parse_revision_value(value):
+    text_value = clean_text(value).upper()
+    if not text_value:
+        return None
+
+    prefix_number = re.fullmatch(r"([A-Z]+)[\s._-]*0*(\d+)", text_value)
+    if prefix_number:
+        return ("prefix_number", prefix_number.group(1), int(prefix_number.group(2)))
+
+    if re.fullmatch(r"\d+", text_value):
+        return ("number", "", int(text_value))
+
+    if re.fullmatch(r"[A-Z]+", text_value):
+        score = 0
+        for character in text_value:
+            score = score * 26 + (ord(character) - ord("A") + 1)
+        return ("letters", "", score)
+
+    return None
+
+
+def compare_revision_values(revision_a, revision_b, created_a="", created_b=""):
+    """Compare revisions conservatively and explain the basis used."""
+    a_text = clean_text(revision_a)
+    b_text = clean_text(revision_b)
+
+    if normalized_key(a_text) == normalized_key(b_text):
+        return "same", "Same revision value"
+
+    parsed_a = parse_revision_value(a_text)
+    parsed_b = parse_revision_value(b_text)
+
+    if parsed_a and parsed_b and parsed_a[:2] == parsed_b[:2]:
+        if parsed_a[2] > parsed_b[2]:
+            return "a_newer", "Comparable revision sequence"
+        if parsed_b[2] > parsed_a[2]:
+            return "b_newer", "Comparable revision sequence"
+
+    date_a = pd.to_datetime(clean_text(created_a), errors="coerce")
+    date_b = pd.to_datetime(clean_text(created_b), errors="coerce")
+    if pd.notna(date_a) and pd.notna(date_b) and date_a != date_b:
+        if date_a > date_b:
+            return "a_newer", "Different revision formats; later Created Date used"
+        return "b_newer", "Different revision formats; later Created Date used"
+
+    return "unclear", "Revision order cannot be confirmed automatically"
+
+
+def compare_metadata_records(record_a, record_b):
+    differing = []
+    for field in COMPARISON_METADATA_FIELDS:
+        if normalized_key(record_a.get(field, "")) != normalized_key(record_b.get(field, "")):
+            differing.append(field)
+    return differing
+
+
+def revision_values(group):
+    if group is None or group.empty:
+        return []
+    values = {
+        clean_text(value)
+        for value in group["revision"].tolist()
+        if clean_text(value)
+    }
+    return sorted(values, key=revision_sort_key)
+
+
+def build_internal_register_issues(df, register_label):
+    issues = []
+    if df.empty:
+        return pd.DataFrame()
+
+    working = df.copy()
+    working["_identity"] = working.apply(comparison_identity_key, axis=1)
+    working["_title_key"] = working["title"].map(normalized_key)
+    working["_revision_key"] = working["revision"].map(normalized_key)
+    working["_signature"] = working.apply(make_record_signature, axis=1)
+
+    missing_number = working[working["document_number"].map(clean_text) == ""]
+    for _, row in missing_number.iterrows():
+        issues.append(
+            {
+                "register": register_label,
+                "project": clean_text(row["project"]),
+                "discipline": clean_text(row["discipline"]),
+                "document_number": "",
+                "title": clean_text(row["title"]),
+                "revision": clean_text(row["revision"]),
+                "issue": "Document Number is missing; row cannot be reconciled reliably",
+                "severity": "Critical",
+                "csv_rows": str(int(row["csv_row"])),
+            }
+        )
+
+    grouped = working[working["document_number"].map(clean_text) != ""].groupby(
+        ["_identity", "_title_key", "_revision_key"], dropna=False
+    )
+    for _, group in grouped:
+        if len(group) <= 1:
+            continue
+        exact = group["_signature"].nunique() == 1
+        first = group.iloc[0]
+        issues.append(
+            {
+                "register": register_label,
+                "project": clean_text(first["project"]),
+                "discipline": clean_text(first["discipline"]),
+                "document_number": clean_text(first["document_number"]),
+                "title": clean_text(first["title"]),
+                "revision": clean_text(first["revision"]),
+                "issue": (
+                    "Repeated identical rows inside the register"
+                    if exact
+                    else "Same document identity and revision has conflicting metadata inside the register"
+                ),
+                "severity": "Warning" if exact else "Critical",
+                "csv_rows": ", ".join(str(int(value)) for value in group["csv_row"]),
+            }
+        )
+
+    return pd.DataFrame(issues)
+
+
+def compare_master_registers(register_a, register_b, label_a, label_b):
+    """Compare two registers without overwriting either source file."""
+    a = register_a.copy()
+    b = register_b.copy()
+    a["_identity"] = a.apply(comparison_identity_key, axis=1)
+    b["_identity"] = b.apply(comparison_identity_key, axis=1)
+
+    valid_a = a[a["document_number"].map(clean_text) != ""].copy()
+    valid_b = b[b["document_number"].map(clean_text) != ""].copy()
+
+    groups_a = {key: group.copy() for key, group in valid_a.groupby("_identity", dropna=False)}
+    groups_b = {key: group.copy() for key, group in valid_b.groupby("_identity", dropna=False)}
+
+    results = []
+    all_keys = sorted(set(groups_a) | set(groups_b))
+
+    for key in all_keys:
+        group_a = groups_a.get(key, pd.DataFrame(columns=a.columns))
+        group_b = groups_b.get(key, pd.DataFrame(columns=b.columns))
+        current_a = select_comparison_current_row(group_a)
+        current_b = select_comparison_current_row(group_b)
+        history_a = comparison_history_records(group_a)
+        history_b = comparison_history_records(group_b)
+        revisions_a = revision_values(group_a)
+        revisions_b = revision_values(group_b)
+
+        project = clean_text(current_a.get("project", "") or current_b.get("project", ""))
+        discipline = clean_text(current_a.get("discipline", "") or current_b.get("discipline", ""))
+        document_number = clean_text(
+            current_a.get("document_number", "") or current_b.get("document_number", "")
+        )
+        title_a = clean_text(current_a.get("title", ""))
+        title_b = clean_text(current_b.get("title", ""))
+        revision_a = clean_text(current_a.get("revision", ""))
+        revision_b = clean_text(current_b.get("revision", ""))
+        differing_fields = []
+        review_required = True
+
+        if group_b.empty:
+            classification = f"Only in {label_a}"
+            severity = "Warning"
+            recommended = f"Confirm whether this document should also exist in {label_b}."
+        elif group_a.empty:
+            classification = f"Only in {label_b}"
+            severity = "Warning"
+            recommended = f"Confirm whether this is a new document or missing from {label_a}."
+        else:
+            differing_fields = compare_metadata_records(current_a, current_b)
+            revision_relation, revision_basis = compare_revision_values(
+                revision_a,
+                revision_b,
+                current_a.get("created_date", ""),
+                current_b.get("created_date", ""),
+            )
+            title_conflict = normalized_key(title_a) != normalized_key(title_b)
+            revisions_only_a = [value for value in revisions_a if normalized_key(value) not in {normalized_key(v) for v in revisions_b}]
+            revisions_only_b = [value for value in revisions_b if normalized_key(value) not in {normalized_key(v) for v in revisions_a}]
+
+            if title_conflict:
+                classification = "Title conflict – manual review"
+                severity = "Critical"
+                recommended = "Compare the source documents. Do not overwrite either register until the correct title is approved."
+            elif revision_relation == "a_newer":
+                classification = f"Newer revision in {label_a}"
+                severity = "Review"
+                recommended = f"Verify the revision sequence and confirm whether {label_b} needs updating. {revision_basis}."
+            elif revision_relation == "b_newer":
+                classification = f"Newer revision in {label_b}"
+                severity = "Review"
+                recommended = f"Verify the revision sequence and confirm whether {label_a} needs updating. {revision_basis}."
+            elif revision_relation == "unclear":
+                classification = "Revision difference – manual review"
+                severity = "Warning"
+                recommended = "Revision order is not safely comparable. Review the documents and dates manually."
+            elif differing_fields:
+                classification = "Same revision – metadata changed"
+                severity = "Warning"
+                recommended = "Compare the changed metadata fields and approve the correct value before reconciliation."
+            elif revisions_only_a or revisions_only_b:
+                classification = "Revision history differs"
+                severity = "Review"
+                recommended = "The current record matches, but one register has additional revision history. Confirm whether the missing history should be added."
+            else:
+                classification = "No change"
+                severity = "Clear"
+                recommended = "No reconciliation action is required."
+                review_required = False
+
+        item_key_raw = "|".join([*key, normalized_key(classification)])
+        item_key = hashlib.sha256(item_key_raw.encode("utf-8")).hexdigest()
+        revision_keys_a = {normalized_key(value) for value in revisions_a}
+        revision_keys_b = {normalized_key(value) for value in revisions_b}
+        revisions_only_a = [value for value in revisions_a if normalized_key(value) not in revision_keys_b]
+        revisions_only_b = [value for value in revisions_b if normalized_key(value) not in revision_keys_a]
+
+        results.append(
+            {
+                "item_key": item_key,
+                "project": project,
+                "discipline": discipline,
+                "document_number": document_number,
+                "title_a": title_a,
+                "title_b": title_b,
+                "revision_a": revision_a,
+                "revision_b": revision_b,
+                "status_a": clean_text(current_a.get("status", "")),
+                "status_b": clean_text(current_b.get("status", "")),
+                "classification": classification,
+                "severity": severity,
+                "differing_fields": ", ".join(differing_fields),
+                "revisions_only_a": ", ".join(revisions_only_a),
+                "revisions_only_b": ", ".join(revisions_only_b),
+                "recommended_action": recommended,
+                "review_required": review_required,
+                "record_a": current_a,
+                "record_b": current_b,
+                "history_a": history_a,
+                "history_b": history_b,
+            }
+        )
+
+    results_df = pd.DataFrame(results)
+    internal_issues = pd.concat(
+        [
+            build_internal_register_issues(a, label_a),
+            build_internal_register_issues(b, label_b),
+        ],
+        ignore_index=True,
+    )
+
+    if results_df.empty:
+        summary = {
+            "total_documents": 0,
+            "review_items": 0,
+            "no_change_items": 0,
+            "only_a": 0,
+            "only_b": 0,
+            "newer_a": 0,
+            "newer_b": 0,
+        }
+    else:
+        summary = {
+            "total_documents": int(len(results_df)),
+            "review_items": int(results_df["review_required"].sum()),
+            "no_change_items": int((~results_df["review_required"]).sum()),
+            "only_a": int(results_df["classification"].eq(f"Only in {label_a}").sum()),
+            "only_b": int(results_df["classification"].eq(f"Only in {label_b}").sum()),
+            "newer_a": int(results_df["classification"].eq(f"Newer revision in {label_a}").sum()),
+            "newer_b": int(results_df["classification"].eq(f"Newer revision in {label_b}").sum()),
+        }
+
+    return results_df, internal_issues, summary
+
+
+def comparison_export_dataframe(results_df, label_a, label_b):
+    if results_df.empty:
+        return pd.DataFrame()
+
+    export = results_df.copy()
+    export = export.rename(
+        columns={
+            "title_a": f"Title – {label_a}",
+            "title_b": f"Title – {label_b}",
+            "revision_a": f"Revision – {label_a}",
+            "revision_b": f"Revision – {label_b}",
+            "status_a": f"Status – {label_a}",
+            "status_b": f"Status – {label_b}",
+            "revisions_only_a": f"Revisions only in {label_a}",
+            "revisions_only_b": f"Revisions only in {label_b}",
+        }
+    )
+    export["Review Status"] = export["review_required"].map(
+        {True: "Pending Review", False: "No Review Required"}
+    )
+    export["Reviewer"] = ""
+    export["Review Comments"] = ""
+    return export.drop(
+        columns=[
+            "item_key",
+            "review_required",
+            "record_a",
+            "record_b",
+            "history_a",
+            "history_b",
+        ],
+        errors="ignore",
+    )
+
+
+def comparison_side_by_side_dataframe(record_a, record_b, label_a, label_b):
+    rows = []
+    for field in CSV_COLUMNS:
+        value_a = clean_text(record_a.get(field, ""))
+        value_b = clean_text(record_b.get(field, ""))
+        rows.append(
+            {
+                "Field": field.replace("_", " ").title(),
+                label_a: value_a,
+                label_b: value_b,
+                "Match": "Yes" if normalized_key(value_a) == normalized_key(value_b) else "No",
+            }
+        )
+    return pd.DataFrame(rows)
 
 
 def row_completeness(row):
@@ -1249,6 +1649,8 @@ def display_table(
         "file_id",
         "keep_id",
         "remove_id",
+        "comparison_id",
+        "comparison_item_id",
     }
     display_df = display_df.drop(
         columns=[
@@ -1508,6 +1910,7 @@ with st.sidebar:
             "Dashboard",
             "Add document",
             "Import CSV",
+            "Register comparison",
             "PDF library",
             "Document register",
             "Quality review",
@@ -1542,6 +1945,7 @@ st.markdown(
             <span class="hero-badge">Duplicate protection</span>
             <span class="hero-badge">Revision tracking</span>
             <span class="hero-badge">CSV import</span>
+            <span class="hero-badge">Register comparison</span>
             <span class="hero-badge">PDF document library</span>
             <span class="hero-badge">Project + discipline folders</span>
             <span class="hero-badge">Manual review + approval</span>
@@ -1971,6 +2375,590 @@ elif page == "Import CSV":
         except Exception as error:
             st.error("The CSV could not be processed.")
             st.code(str(error))
+
+
+# -----------------------------
+# Register comparison
+# -----------------------------
+
+elif page == "Register comparison":
+    render_section_header(
+        "Master Register Comparison & Reconciliation",
+        "Upload two independent CSV registers, compare them side by side and create an auditable reconciliation report. Neither source register is overwritten.",
+    )
+
+    st.info(
+        "Matching uses Project + Discipline + Document Number. The app highlights differences, but uncertain results always require manual review and approval comments."
+    )
+
+    label_col_a, label_col_b = st.columns(2)
+    with label_col_a:
+        register_a_label = st.text_input(
+            "Register A label",
+            value="Register A",
+            key="comparison_label_a",
+        )
+        register_a_file = st.file_uploader(
+            "Upload Register A (CSV)",
+            type=["csv"],
+            key="comparison_file_a",
+        )
+    with label_col_b:
+        register_b_label = st.text_input(
+            "Register B label",
+            value="Register B",
+            key="comparison_label_b",
+        )
+        register_b_file = st.file_uploader(
+            "Upload Register B (CSV)",
+            type=["csv"],
+            key="comparison_file_b",
+        )
+
+    current_results_df = pd.DataFrame()
+    current_internal_issues_df = pd.DataFrame()
+    current_summary = {}
+
+    if register_a_file is not None and register_b_file is not None:
+        try:
+            raw_a = read_uploaded_csv(register_a_file)
+            raw_b = read_uploaded_csv(register_b_file)
+
+            missing_a = [column for column in ["document_number"] if column not in raw_a.columns]
+            missing_b = [column for column in ["document_number"] if column not in raw_b.columns]
+
+            if missing_a or missing_b:
+                if missing_a:
+                    st.error(f"{register_a_label} is missing: {', '.join(missing_a)}")
+                if missing_b:
+                    st.error(f"{register_b_label} is missing: {', '.join(missing_b)}")
+            else:
+                prepared_a = prepare_uploaded_register(raw_a)
+                prepared_b = prepare_uploaded_register(raw_b)
+                (
+                    current_results_df,
+                    current_internal_issues_df,
+                    current_summary,
+                ) = compare_master_registers(
+                    prepared_a,
+                    prepared_b,
+                    register_a_label,
+                    register_b_label,
+                )
+
+                render_metric_cards(
+                    [
+                        (f"Rows – {register_a_label}", len(prepared_a), "Source rows", ""),
+                        (f"Rows – {register_b_label}", len(prepared_b), "Source rows", ""),
+                        ("Documents compared", current_summary.get("total_documents", 0), "Matched by controlled identity", ""),
+                        ("Manual review", current_summary.get("review_items", 0), "Differences needing a decision", "health-watch"),
+                        ("No change", current_summary.get("no_change_items", 0), "Aligned records", "health-good"),
+                    ]
+                )
+
+                overview_tab, review_tab, internal_tab, saved_tab = st.tabs(
+                    [
+                        "Comparison overview",
+                        "Side-by-side review",
+                        "Issues inside each register",
+                        "Saved comparisons",
+                    ]
+                )
+
+                with overview_tab:
+                    filter_left, filter_middle, filter_right = st.columns(3)
+                    with filter_left:
+                        classification_options = sorted(
+                            current_results_df["classification"].dropna().unique().tolist()
+                        ) if not current_results_df.empty else []
+                        selected_classifications = st.multiselect(
+                            "Classification",
+                            classification_options,
+                            key="comparison_class_filter",
+                        )
+                    with filter_middle:
+                        project_options = sorted(
+                            value for value in current_results_df["project"].dropna().unique().tolist()
+                            if clean_text(value)
+                        ) if not current_results_df.empty else []
+                        selected_projects = st.multiselect(
+                            "Project",
+                            project_options,
+                            key="comparison_project_filter",
+                        )
+                    with filter_right:
+                        discipline_options = sorted(
+                            value for value in current_results_df["discipline"].dropna().unique().tolist()
+                            if clean_text(value)
+                        ) if not current_results_df.empty else []
+                        selected_disciplines = st.multiselect(
+                            "Discipline",
+                            discipline_options,
+                            key="comparison_discipline_filter",
+                        )
+
+                    filtered_comparison = current_results_df.copy()
+                    if selected_classifications:
+                        filtered_comparison = filtered_comparison[
+                            filtered_comparison["classification"].isin(selected_classifications)
+                        ]
+                    if selected_projects:
+                        filtered_comparison = filtered_comparison[
+                            filtered_comparison["project"].isin(selected_projects)
+                        ]
+                    if selected_disciplines:
+                        filtered_comparison = filtered_comparison[
+                            filtered_comparison["discipline"].isin(selected_disciplines)
+                        ]
+
+                    display_table(
+                        filtered_comparison,
+                        columns=[
+                            "project",
+                            "discipline",
+                            "document_number",
+                            "title_a",
+                            "title_b",
+                            "revision_a",
+                            "revision_b",
+                            "status_a",
+                            "status_b",
+                            "classification",
+                            "severity",
+                            "differing_fields",
+                            "revisions_only_a",
+                            "revisions_only_b",
+                            "recommended_action",
+                        ],
+                        rename={
+                            "project": "Project",
+                            "discipline": "Discipline",
+                            "document_number": "Document Number",
+                            "title_a": f"Title – {register_a_label}",
+                            "title_b": f"Title – {register_b_label}",
+                            "revision_a": f"Revision – {register_a_label}",
+                            "revision_b": f"Revision – {register_b_label}",
+                            "status_a": f"Status – {register_a_label}",
+                            "status_b": f"Status – {register_b_label}",
+                            "classification": "Comparison Result",
+                            "severity": "Priority",
+                            "differing_fields": "Changed Fields",
+                            "revisions_only_a": f"Revisions only in {register_a_label}",
+                            "revisions_only_b": f"Revisions only in {register_b_label}",
+                            "recommended_action": "Recommended Manual Action",
+                        },
+                        height=650,
+                        row_height=42,
+                        key="current_comparison_overview",
+                    )
+
+                    export_df = comparison_export_dataframe(
+                        filtered_comparison,
+                        register_a_label,
+                        register_b_label,
+                    )
+                    download_left, download_right = st.columns(2)
+                    with download_left:
+                        st.download_button(
+                            "Download full reconciliation report",
+                            data=export_df.to_csv(index=False).encode("utf-8-sig"),
+                            file_name="master_register_reconciliation.csv",
+                            mime="text/csv",
+                            use_container_width=True,
+                        )
+                    with download_right:
+                        issues_export = comparison_export_dataframe(
+                            filtered_comparison[filtered_comparison["review_required"]],
+                            register_a_label,
+                            register_b_label,
+                        )
+                        st.download_button(
+                            "Download manual-review items only",
+                            data=issues_export.to_csv(index=False).encode("utf-8-sig"),
+                            file_name="master_register_manual_review.csv",
+                            mime="text/csv",
+                            use_container_width=True,
+                        )
+
+                    with st.expander("Save this comparison for audited review", expanded=False):
+                        comparison_name = st.text_input(
+                            "Comparison name",
+                            value=f"{register_a_label} vs {register_b_label}",
+                            key="comparison_name",
+                        )
+                        comparison_creator = st.text_input(
+                            "Prepared by",
+                            placeholder="Reviewer or Document Controller name",
+                            key="comparison_creator",
+                        )
+                        st.caption(
+                            "Saving creates a permanent reconciliation session. Each difference can then be manually approved with reviewer comments."
+                        )
+                        if st.button(
+                            "Save comparison session",
+                            type="primary",
+                            use_container_width=True,
+                            key="save_comparison_session",
+                        ):
+                            if not clean_text(comparison_name):
+                                st.error("Comparison name is required.")
+                            elif not clean_text(comparison_creator):
+                                st.error("Prepared by is required.")
+                            else:
+                                items = current_results_df.to_dict("records")
+                                comparison_id = create_register_comparison(
+                                    {
+                                        "comparison_name": comparison_name,
+                                        "register_a_label": register_a_label,
+                                        "register_b_label": register_b_label,
+                                        "register_a_filename": register_a_file.name,
+                                        "register_b_filename": register_b_file.name,
+                                        "created_by": comparison_creator,
+                                        "total_items": len(current_results_df),
+                                        "review_items": int(current_results_df["review_required"].sum()),
+                                        "no_change_items": int((~current_results_df["review_required"]).sum()),
+                                        "summary": current_summary,
+                                    },
+                                    items,
+                                )
+                                st.session_state["flash_message"] = (
+                                    "success",
+                                    f"Comparison session saved successfully. {current_summary.get('review_items', 0)} item(s) are ready for manual review.",
+                                )
+                                st.rerun()
+
+                with review_tab:
+                    review_candidates = current_results_df[
+                        current_results_df["review_required"]
+                    ].copy()
+                    if review_candidates.empty:
+                        st.success("The two registers are aligned. No manual comparison item was found.")
+                    else:
+                        choices = {}
+                        for index, row in review_candidates.iterrows():
+                            base_label = (
+                                f"{clean_text(row['document_number'])} · "
+                                f"{clean_text(row['classification'])} · "
+                                f"{clean_text(row['project']) or 'No project'}"
+                            )
+                            label = base_label
+                            counter = 2
+                            while label in choices:
+                                label = f"{base_label} · Entry {counter}"
+                                counter += 1
+                            choices[label] = index
+
+                        selected_label = st.selectbox(
+                            "Select a comparison item",
+                            list(choices.keys()),
+                            key="current_comparison_item",
+                        )
+                        selected = review_candidates.loc[choices[selected_label]]
+
+                        st.warning(
+                            f"{selected['classification']}: {selected['recommended_action']}"
+                        )
+                        side_by_side = comparison_side_by_side_dataframe(
+                            selected["record_a"],
+                            selected["record_b"],
+                            register_a_label,
+                            register_b_label,
+                        )
+                        display_table(
+                            side_by_side,
+                            height=520,
+                            row_height=38,
+                            key="current_side_by_side",
+                        )
+
+                        history_left, history_right = st.columns(2)
+                        with history_left:
+                            st.markdown(f"#### Revision history – {register_a_label}")
+                            history_a_df = pd.DataFrame(selected["history_a"])
+                            if history_a_df.empty:
+                                st.info("No matching record.")
+                            else:
+                                display_table(
+                                    history_a_df,
+                                    columns=["document_number", "title", "revision", "status", "created_date", "due_date", "file_name"],
+                                    height=260,
+                                    key="current_history_a",
+                                )
+                        with history_right:
+                            st.markdown(f"#### Revision history – {register_b_label}")
+                            history_b_df = pd.DataFrame(selected["history_b"])
+                            if history_b_df.empty:
+                                st.info("No matching record.")
+                            else:
+                                display_table(
+                                    history_b_df,
+                                    columns=["document_number", "title", "revision", "status", "created_date", "due_date", "file_name"],
+                                    height=260,
+                                    key="current_history_b",
+                                )
+
+                        st.info(
+                            "This live comparison is read-only. Save the comparison session from the Overview tab to record an approval decision and comments."
+                        )
+
+                with internal_tab:
+                    if current_internal_issues_df.empty:
+                        st.success("No repeated identities or unmatchable document-number rows were found inside either register.")
+                    else:
+                        st.warning(
+                            "These findings exist inside an individual source register and should be corrected before final reconciliation."
+                        )
+                        display_table(
+                            current_internal_issues_df,
+                            rename={
+                                "register": "Source Register",
+                                "project": "Project",
+                                "discipline": "Discipline",
+                                "document_number": "Document Number",
+                                "title": "Title",
+                                "revision": "Revision",
+                                "issue": "Issue",
+                                "severity": "Priority",
+                                "csv_rows": "CSV Rows",
+                            },
+                            height=500,
+                            key="comparison_internal_issues",
+                        )
+
+                with saved_tab:
+                    st.caption("Saved comparisons are also available below after either source file is removed.")
+
+        except pd.errors.EmptyDataError:
+            st.error("One of the uploaded CSV files is empty.")
+        except Exception as error:
+            st.error("The registers could not be compared.")
+            st.code(str(error))
+
+    st.divider()
+    st.subheader("Saved comparison sessions")
+    saved_comparisons_df = get_register_comparisons()
+
+    if saved_comparisons_df.empty:
+        st.info("No comparison session has been saved yet.")
+    else:
+        saved_choices = {}
+        for _, row in saved_comparisons_df.iterrows():
+            visible = (
+                f"{clean_text(row['comparison_name'])} · "
+                f"{clean_text(row['register_a_label'])} vs {clean_text(row['register_b_label'])} · "
+                f"{clean_text(row['created_at'])}"
+            )
+            saved_choices[visible] = int(row["comparison_id"])
+
+        selected_saved_label = st.selectbox(
+            "Open saved comparison",
+            list(saved_choices.keys()),
+            key="saved_comparison_selector",
+        )
+        selected_comparison_id = saved_choices[selected_saved_label]
+        saved_row = saved_comparisons_df[
+            saved_comparisons_df["comparison_id"] == selected_comparison_id
+        ].iloc[0]
+        saved_items_df = get_register_comparison_items(selected_comparison_id)
+        saved_label_a = clean_text(saved_row["register_a_label"])
+        saved_label_b = clean_text(saved_row["register_b_label"])
+
+        resolved_count = int(saved_items_df["review_status"].eq("Resolved").sum()) if not saved_items_df.empty else 0
+        pending_count = int(saved_items_df["review_status"].isin(["Pending Review", "Correction Required", "Escalated"]).sum()) if not saved_items_df.empty else 0
+        render_metric_cards(
+            [
+                ("Comparison items", len(saved_items_df), "All reconciled identities", ""),
+                ("Pending decisions", pending_count, "Needs manual approval", "health-watch"),
+                ("Resolved decisions", resolved_count, "Comments recorded", "health-good"),
+                ("Prepared by", clean_text(saved_row["created_by"]), clean_text(saved_row["created_at"]), ""),
+            ]
+        )
+
+        if saved_items_df.empty:
+            st.info("This saved comparison contains no items.")
+        else:
+            saved_filter_col1, saved_filter_col2 = st.columns(2)
+            with saved_filter_col1:
+                saved_status_filter = st.multiselect(
+                    "Review status",
+                    sorted(saved_items_df["review_status"].dropna().unique().tolist()),
+                    key="saved_comparison_status_filter",
+                )
+            with saved_filter_col2:
+                saved_class_filter = st.multiselect(
+                    "Comparison result",
+                    sorted(saved_items_df["classification"].dropna().unique().tolist()),
+                    key="saved_comparison_class_filter",
+                )
+
+            saved_filtered = saved_items_df.copy()
+            if saved_status_filter:
+                saved_filtered = saved_filtered[saved_filtered["review_status"].isin(saved_status_filter)]
+            if saved_class_filter:
+                saved_filtered = saved_filtered[saved_filtered["classification"].isin(saved_class_filter)]
+
+            display_table(
+                saved_filtered,
+                columns=[
+                    "project",
+                    "discipline",
+                    "document_number",
+                    "title_a",
+                    "title_b",
+                    "revision_a",
+                    "revision_b",
+                    "classification",
+                    "severity",
+                    "differing_fields",
+                    "review_status",
+                    "review_decision",
+                    "reviewer",
+                    "comments",
+                    "reviewed_at",
+                ],
+                rename={
+                    "project": "Project",
+                    "discipline": "Discipline",
+                    "document_number": "Document Number",
+                    "title_a": f"Title – {saved_label_a}",
+                    "title_b": f"Title – {saved_label_b}",
+                    "revision_a": f"Revision – {saved_label_a}",
+                    "revision_b": f"Revision – {saved_label_b}",
+                    "classification": "Comparison Result",
+                    "severity": "Priority",
+                    "differing_fields": "Changed Fields",
+                    "review_status": "Review Status",
+                    "review_decision": "Decision",
+                    "reviewer": "Reviewer",
+                    "comments": "Comments",
+                    "reviewed_at": "Reviewed At",
+                },
+                height=520,
+                row_height=42,
+                key="saved_comparison_table",
+            )
+
+            reviewable_saved = saved_items_df[
+                saved_items_df["review_required"] == 1
+            ].copy()
+            if not reviewable_saved.empty:
+                saved_item_choices = {}
+                for index, row in reviewable_saved.iterrows():
+                    base = (
+                        f"{clean_text(row['document_number'])} · "
+                        f"{clean_text(row['classification'])} · "
+                        f"{clean_text(row['review_status'])}"
+                    )
+                    visible = base
+                    counter = 2
+                    while visible in saved_item_choices:
+                        visible = f"{base} · Entry {counter}"
+                        counter += 1
+                    saved_item_choices[visible] = index
+
+                selected_saved_item_label = st.selectbox(
+                    "Select an item for manual decision",
+                    list(saved_item_choices.keys()),
+                    key="saved_comparison_item_selector",
+                )
+                selected_saved_item = reviewable_saved.loc[
+                    saved_item_choices[selected_saved_item_label]
+                ]
+
+                try:
+                    saved_record_a = json.loads(clean_text(selected_saved_item["record_a_json"]) or "{}")
+                    saved_record_b = json.loads(clean_text(selected_saved_item["record_b_json"]) or "{}")
+                    saved_history_a = json.loads(clean_text(selected_saved_item["history_a_json"]) or "[]")
+                    saved_history_b = json.loads(clean_text(selected_saved_item["history_b_json"]) or "[]")
+                except json.JSONDecodeError:
+                    saved_record_a, saved_record_b, saved_history_a, saved_history_b = {}, {}, [], []
+
+                st.warning(
+                    f"{clean_text(selected_saved_item['classification'])}: {clean_text(selected_saved_item['recommended_action'])}"
+                )
+                display_table(
+                    comparison_side_by_side_dataframe(
+                        saved_record_a,
+                        saved_record_b,
+                        saved_label_a,
+                        saved_label_b,
+                    ),
+                    height=520,
+                    row_height=38,
+                    key="saved_side_by_side",
+                )
+
+                saved_history_col_a, saved_history_col_b = st.columns(2)
+                with saved_history_col_a:
+                    st.markdown(f"#### Revision history – {saved_label_a}")
+                    if saved_history_a:
+                        display_table(pd.DataFrame(saved_history_a), height=250, key="saved_history_a")
+                    else:
+                        st.info("No matching record.")
+                with saved_history_col_b:
+                    st.markdown(f"#### Revision history – {saved_label_b}")
+                    if saved_history_b:
+                        display_table(pd.DataFrame(saved_history_b), height=250, key="saved_history_b")
+                    else:
+                        st.info("No matching record.")
+
+                with st.form("saved_comparison_review_form"):
+                    decision = st.selectbox(
+                        "Manual review decision",
+                        COMPARISON_DECISIONS,
+                    )
+                    reviewer = st.text_input(
+                        "Reviewer name",
+                        value=clean_text(selected_saved_item.get("reviewer", "")),
+                    )
+                    comments = st.text_area(
+                        "Mandatory approval comments",
+                        value=clean_text(selected_saved_item.get("comments", "")),
+                        placeholder="Explain what was compared, which register value was accepted and why.",
+                    )
+                    submit_review = st.form_submit_button(
+                        "Save manual decision",
+                        type="primary",
+                        use_container_width=True,
+                    )
+
+                    if submit_review:
+                        if not clean_text(reviewer):
+                            st.error("Reviewer name is required.")
+                        elif not clean_text(comments):
+                            st.error("Approval comments are required.")
+                        else:
+                            update_register_comparison_item_review(
+                                int(selected_saved_item["comparison_item_id"]),
+                                decision,
+                                reviewer,
+                                comments,
+                            )
+                            st.session_state["flash_message"] = (
+                                "success",
+                                "The reconciliation decision and comments were saved.",
+                            )
+                            st.rerun()
+
+            saved_export = saved_filtered.drop(
+                columns=[
+                    "comparison_item_id",
+                    "comparison_id",
+                    "item_key",
+                    "record_a_json",
+                    "record_b_json",
+                    "history_a_json",
+                    "history_b_json",
+                ],
+                errors="ignore",
+            )
+            st.download_button(
+                "Download saved reconciliation with decisions",
+                data=saved_export.to_csv(index=False).encode("utf-8-sig"),
+                file_name="saved_master_register_reconciliation.csv",
+                mime="text/csv",
+                use_container_width=True,
+            )
 
 
 # -----------------------------

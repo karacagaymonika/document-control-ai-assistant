@@ -148,6 +148,77 @@ def init_db():
 
         connection.execute(
             """
+            CREATE TABLE IF NOT EXISTS register_comparisons (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                comparison_name TEXT NOT NULL,
+                register_a_label TEXT NOT NULL,
+                register_b_label TEXT NOT NULL,
+                register_a_filename TEXT,
+                register_b_filename TEXT,
+                created_by TEXT NOT NULL,
+                total_items INTEGER NOT NULL DEFAULT 0,
+                review_items INTEGER NOT NULL DEFAULT 0,
+                no_change_items INTEGER NOT NULL DEFAULT 0,
+                summary_json TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS register_comparison_items (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                comparison_id INTEGER NOT NULL,
+                item_key TEXT NOT NULL,
+                project TEXT,
+                discipline TEXT,
+                document_number TEXT,
+                title_a TEXT,
+                title_b TEXT,
+                revision_a TEXT,
+                revision_b TEXT,
+                classification TEXT NOT NULL,
+                severity TEXT NOT NULL,
+                differing_fields TEXT,
+                recommended_action TEXT,
+                record_a_json TEXT NOT NULL DEFAULT '{}',
+                record_b_json TEXT NOT NULL DEFAULT '{}',
+                history_a_json TEXT NOT NULL DEFAULT '[]',
+                history_b_json TEXT NOT NULL DEFAULT '[]',
+                review_required INTEGER NOT NULL DEFAULT 1,
+                review_status TEXT NOT NULL DEFAULT 'Pending Review',
+                review_decision TEXT,
+                reviewer TEXT,
+                comments TEXT,
+                reviewed_at TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY(comparison_id) REFERENCES register_comparisons(id) ON DELETE CASCADE
+            )
+            """
+        )
+
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_register_comparisons_created
+            ON register_comparisons(created_at)
+            """
+        )
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_register_comparison_items_run
+            ON register_comparison_items(comparison_id)
+            """
+        )
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_register_comparison_items_review
+            ON register_comparison_items(review_status, review_required)
+            """
+        )
+
+        connection.execute(
+            """
             CREATE UNIQUE INDEX IF NOT EXISTS idx_document_files_sha256
             ON document_files(sha256)
             """
@@ -979,3 +1050,197 @@ def get_audit_log(limit=500):
             connection,
             params=(int(limit),),
         )
+
+# -----------------------------
+# Master register comparisons
+# -----------------------------
+
+def create_register_comparison(comparison, items):
+    """Save a complete comparison session and its reconciliation items."""
+    item_records = list(items or [])
+    summary = comparison.get("summary", {}) or {}
+
+    with get_connection() as connection:
+        cursor = connection.execute(
+            """
+            INSERT INTO register_comparisons (
+                comparison_name, register_a_label, register_b_label,
+                register_a_filename, register_b_filename, created_by,
+                total_items, review_items, no_change_items, summary_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                str(comparison.get("comparison_name", "") or "").strip(),
+                str(comparison.get("register_a_label", "") or "").strip(),
+                str(comparison.get("register_b_label", "") or "").strip(),
+                str(comparison.get("register_a_filename", "") or "").strip(),
+                str(comparison.get("register_b_filename", "") or "").strip(),
+                str(comparison.get("created_by", "") or "").strip(),
+                int(comparison.get("total_items", len(item_records)) or 0),
+                int(comparison.get("review_items", 0) or 0),
+                int(comparison.get("no_change_items", 0) or 0),
+                json.dumps(summary, ensure_ascii=False),
+            ),
+        )
+        comparison_id = cursor.lastrowid
+
+        for item in item_records:
+            review_required = bool(item.get("review_required", True))
+            default_status = "Pending Review" if review_required else "No Review Required"
+            connection.execute(
+                """
+                INSERT INTO register_comparison_items (
+                    comparison_id, item_key, project, discipline, document_number,
+                    title_a, title_b, revision_a, revision_b, classification,
+                    severity, differing_fields, recommended_action,
+                    record_a_json, record_b_json, history_a_json, history_b_json,
+                    review_required, review_status
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    int(comparison_id),
+                    str(item.get("item_key", "") or ""),
+                    str(item.get("project", "") or ""),
+                    str(item.get("discipline", "") or ""),
+                    str(item.get("document_number", "") or ""),
+                    str(item.get("title_a", "") or ""),
+                    str(item.get("title_b", "") or ""),
+                    str(item.get("revision_a", "") or ""),
+                    str(item.get("revision_b", "") or ""),
+                    str(item.get("classification", "") or ""),
+                    str(item.get("severity", "") or ""),
+                    str(item.get("differing_fields", "") or ""),
+                    str(item.get("recommended_action", "") or ""),
+                    json.dumps(item.get("record_a", {}) or {}, ensure_ascii=False),
+                    json.dumps(item.get("record_b", {}) or {}, ensure_ascii=False),
+                    json.dumps(item.get("history_a", []) or [], ensure_ascii=False),
+                    json.dumps(item.get("history_b", []) or [], ensure_ascii=False),
+                    1 if review_required else 0,
+                    default_status,
+                ),
+            )
+
+        connection.commit()
+        return comparison_id
+
+
+def get_register_comparisons():
+    with get_connection() as connection:
+        return pd.read_sql_query(
+            """
+            SELECT
+                id AS comparison_id,
+                comparison_name,
+                register_a_label,
+                register_b_label,
+                register_a_filename,
+                register_b_filename,
+                created_by,
+                total_items,
+                review_items,
+                no_change_items,
+                summary_json,
+                created_at
+            FROM register_comparisons
+            ORDER BY created_at DESC, id DESC
+            """,
+            connection,
+        )
+
+
+def get_register_comparison_items(comparison_id):
+    with get_connection() as connection:
+        return pd.read_sql_query(
+            """
+            SELECT
+                id AS comparison_item_id,
+                comparison_id,
+                item_key,
+                project,
+                discipline,
+                document_number,
+                title_a,
+                title_b,
+                revision_a,
+                revision_b,
+                classification,
+                severity,
+                differing_fields,
+                recommended_action,
+                record_a_json,
+                record_b_json,
+                history_a_json,
+                history_b_json,
+                review_required,
+                review_status,
+                review_decision,
+                reviewer,
+                comments,
+                reviewed_at,
+                created_at
+            FROM register_comparison_items
+            WHERE comparison_id = ?
+            ORDER BY
+                CASE severity
+                    WHEN 'Critical' THEN 0
+                    WHEN 'Warning' THEN 1
+                    WHEN 'Review' THEN 2
+                    ELSE 3
+                END,
+                project,
+                discipline,
+                document_number
+            """,
+            connection,
+            params=(int(comparison_id),),
+        )
+
+
+def update_register_comparison_item_review(
+    comparison_item_id,
+    decision,
+    reviewer,
+    comments,
+):
+    reviewer_text = str(reviewer or "").strip()
+    comments_text = str(comments or "").strip()
+    decision_text = str(decision or "").strip()
+
+    if not reviewer_text:
+        raise ValueError("Reviewer name is required.")
+    if not comments_text:
+        raise ValueError("Review comments are required.")
+    if not decision_text:
+        raise ValueError("A review decision is required.")
+
+    status_map = {
+        "Approved – Register A accepted": "Resolved",
+        "Approved – Register B accepted": "Resolved",
+        "Approved – Both records valid": "Resolved",
+        "No Action Required": "Resolved",
+        "Correction Required": "Correction Required",
+        "Escalated": "Escalated",
+    }
+    review_status = status_map.get(decision_text, "Pending Review")
+    now = datetime.now().isoformat(timespec="seconds")
+
+    with get_connection() as connection:
+        cursor = connection.execute(
+            """
+            UPDATE register_comparison_items
+            SET review_status = ?, review_decision = ?, reviewer = ?,
+                comments = ?, reviewed_at = ?
+            WHERE id = ?
+            """,
+            (
+                review_status,
+                decision_text,
+                reviewer_text,
+                comments_text,
+                now,
+                int(comparison_item_id),
+            ),
+        )
+        connection.commit()
+        return cursor.rowcount
+
