@@ -39,7 +39,7 @@ from database import (
 
 st.set_page_config(
     page_title="Document Control AI Assistant",
-    page_icon="ðŸ“‘",
+    page_icon="📑",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -85,9 +85,9 @@ COMPARISON_METADATA_FIELDS = [
 ]
 
 COMPARISON_DECISIONS = [
-    "Approved â€“ Register A accepted",
-    "Approved â€“ Register B accepted",
-    "Approved â€“ Both records valid",
+    "Approved – Register A accepted",
+    "Approved – Register B accepted",
+    "Approved – Both records valid",
     "Correction Required",
     "Escalated",
     "No Action Required",
@@ -874,7 +874,7 @@ def compare_master_registers(register_a, register_b, label_a, label_b):
             revisions_only_b = [value for value in revisions_b if normalized_key(value) not in {normalized_key(v) for v in revisions_a}]
 
             if title_conflict:
-                classification = "Title conflict â€“ manual review"
+                classification = "Title conflict – manual review"
                 severity = "Critical"
                 recommended = "Compare the source documents. Do not overwrite either register until the correct title is approved."
             elif revision_relation == "a_newer":
@@ -886,11 +886,11 @@ def compare_master_registers(register_a, register_b, label_a, label_b):
                 severity = "Review"
                 recommended = f"Verify the revision sequence and confirm whether {label_a} needs updating. {revision_basis}."
             elif revision_relation == "unclear":
-                classification = "Revision difference â€“ manual review"
+                classification = "Revision difference – manual review"
                 severity = "Warning"
                 recommended = "Revision order is not safely comparable. Review the documents and dates manually."
             elif differing_fields:
-                classification = "Same revision â€“ metadata changed"
+                classification = "Same revision – metadata changed"
                 severity = "Warning"
                 recommended = "Compare the changed metadata fields and approve the correct value before reconciliation."
             elif revisions_only_a or revisions_only_b:
@@ -976,12 +976,12 @@ def comparison_export_dataframe(results_df, label_a, label_b):
     export = results_df.copy()
     export = export.rename(
         columns={
-            "title_a": f"Title â€“ {label_a}",
-            "title_b": f"Title â€“ {label_b}",
-            "revision_a": f"Revision â€“ {label_a}",
-            "revision_b": f"Revision â€“ {label_b}",
-            "status_a": f"Status â€“ {label_a}",
-            "status_b": f"Status â€“ {label_b}",
+            "title_a": f"Title – {label_a}",
+            "title_b": f"Title – {label_b}",
+            "revision_a": f"Revision – {label_a}",
+            "revision_b": f"Revision – {label_b}",
+            "status_a": f"Status – {label_a}",
+            "status_b": f"Status – {label_b}",
             "revisions_only_a": f"Revisions only in {label_a}",
             "revisions_only_b": f"Revisions only in {label_b}",
         }
@@ -1730,9 +1730,9 @@ def render_attached_files(files_df, key_prefix, allow_delete=False):
         stored_path = Path(clean_text(file_row["stored_path"]))
         title = clean_text(file_row.get("original_file_name", "PDF document"))
         details = (
-            f"{clean_text(file_row.get('document_number', ''))} Â· "
-            f"{clean_text(file_row.get('revision', '')) or 'No revision'} Â· "
-            f"{human_file_size(file_row.get('file_size', 0))} Â· "
+            f"{clean_text(file_row.get('document_number', ''))} · "
+            f"{clean_text(file_row.get('revision', '')) or 'No revision'} · "
+            f"{human_file_size(file_row.get('file_size', 0))} · "
             f"Uploaded {clean_text(file_row.get('uploaded_at', ''))}"
         )
 
@@ -1810,7 +1810,7 @@ def build_record_choice_map(df):
         if discipline:
             label_parts.append(discipline)
 
-        base_label = " Â· ".join(label_parts)
+        base_label = " · ".join(label_parts)
         label_totals[base_label] = label_totals.get(base_label, 0) + 1
         records.append((base_label, int(row["id"])))
 
@@ -1821,7 +1821,7 @@ def build_record_choice_map(df):
         seen_labels[base_label] = seen_labels.get(base_label, 0) + 1
 
         if label_totals[base_label] > 1:
-            visible_label = f"{base_label} Â· Entry {seen_labels[base_label]}"
+            visible_label = f"{base_label} · Entry {seen_labels[base_label]}"
         else:
             visible_label = base_label
 
@@ -1834,10 +1834,10 @@ def build_review_case_choice_map(cases_df):
     choices = {}
     for position, (_, row) in enumerate(cases_df.iterrows(), start=1):
         label = (
-            f"{clean_text(row.get('issue_type', 'Review'))} Â· "
-            f"{clean_text(row.get('document_number', 'Document')) or 'Document not set'} Â· "
-            f"{clean_text(row.get('revision', '')) or 'No revision'} Â· "
-            f"{clean_text(row.get('status', 'Pending Review'))} Â· Case {position}"
+            f"{clean_text(row.get('issue_type', 'Review'))} · "
+            f"{clean_text(row.get('document_number', 'Document')) or 'Document not set'} · "
+            f"{clean_text(row.get('revision', '')) or 'No revision'} · "
+            f"{clean_text(row.get('status', 'Pending Review'))} · Case {position}"
         )
         choices[label] = int(row["id"])
     return choices
@@ -1903,7 +1903,7 @@ else:
 # -----------------------------
 
 with st.sidebar:
-    st.markdown("## ðŸ“‘ Document Control")
+    st.markdown("## 📑 Document Control")
     st.caption("Register governance workspace")
 
     page = st.radio(
@@ -1931,13 +1931,13 @@ with st.sidebar:
     st.write(f"**{len(missing_pdf_df)}** records without PDF")
     st.write(f"**{len(open_review_cases_df)}** open review cases")
     st.write(f"**{health_score}/100** health score")
-    st.caption("Local SQLite database and file library Â· Demo data only")
+    st.caption("Local SQLite database and file library · Demo data only")
 
 
 st.markdown(
     """
     <div class="hero">
-        <div class="hero-kicker">DOCUMENT GOVERNANCE Â· PORTFOLIO MVP</div>
+        <div class="hero-kicker">DOCUMENT GOVERNANCE · PORTFOLIO MVP</div>
         <h1>Document Control AI Assistant</h1>
         <p>
             A structured workspace for document registers, controlled PDF files,
@@ -2452,8 +2452,8 @@ elif page == "Register comparison":
 
                 render_metric_cards(
                     [
-                        (f"Rows â€“ {register_a_label}", len(prepared_a), "Source rows", ""),
-                        (f"Rows â€“ {register_b_label}", len(prepared_b), "Source rows", ""),
+                        (f"Rows – {register_a_label}", len(prepared_a), "Source rows", ""),
+                        (f"Rows – {register_b_label}", len(prepared_b), "Source rows", ""),
                         ("Documents compared", current_summary.get("total_documents", 0), "Matched by controlled identity", ""),
                         ("Manual review", current_summary.get("review_items", 0), "Differences needing a decision", "health-watch"),
                         ("No change", current_summary.get("no_change_items", 0), "Aligned records", "health-good"),
@@ -2538,12 +2538,12 @@ elif page == "Register comparison":
                             "project": "Project",
                             "discipline": "Discipline",
                             "document_number": "Document Number",
-                            "title_a": f"Title â€“ {register_a_label}",
-                            "title_b": f"Title â€“ {register_b_label}",
-                            "revision_a": f"Revision â€“ {register_a_label}",
-                            "revision_b": f"Revision â€“ {register_b_label}",
-                            "status_a": f"Status â€“ {register_a_label}",
-                            "status_b": f"Status â€“ {register_b_label}",
+                            "title_a": f"Title – {register_a_label}",
+                            "title_b": f"Title – {register_b_label}",
+                            "revision_a": f"Revision – {register_a_label}",
+                            "revision_b": f"Revision – {register_b_label}",
+                            "status_a": f"Status – {register_a_label}",
+                            "status_b": f"Status – {register_b_label}",
                             "classification": "Comparison Result",
                             "severity": "Priority",
                             "differing_fields": "Changed Fields",
@@ -2641,14 +2641,14 @@ elif page == "Register comparison":
                         choices = {}
                         for index, row in review_candidates.iterrows():
                             base_label = (
-                                f"{clean_text(row['document_number'])} Â· "
-                                f"{clean_text(row['classification'])} Â· "
+                                f"{clean_text(row['document_number'])} · "
+                                f"{clean_text(row['classification'])} · "
                                 f"{clean_text(row['project']) or 'No project'}"
                             )
                             label = base_label
                             counter = 2
                             while label in choices:
-                                label = f"{base_label} Â· Entry {counter}"
+                                label = f"{base_label} · Entry {counter}"
                                 counter += 1
                             choices[label] = index
 
@@ -2677,7 +2677,7 @@ elif page == "Register comparison":
 
                         history_left, history_right = st.columns(2)
                         with history_left:
-                            st.markdown(f"#### Revision history â€“ {register_a_label}")
+                            st.markdown(f"#### Revision history – {register_a_label}")
                             history_a_df = pd.DataFrame(selected["history_a"])
                             if history_a_df.empty:
                                 st.info("No matching record.")
@@ -2689,7 +2689,7 @@ elif page == "Register comparison":
                                     key="current_history_a",
                                 )
                         with history_right:
-                            st.markdown(f"#### Revision history â€“ {register_b_label}")
+                            st.markdown(f"#### Revision history – {register_b_label}")
                             history_b_df = pd.DataFrame(selected["history_b"])
                             if history_b_df.empty:
                                 st.info("No matching record.")
@@ -2748,8 +2748,8 @@ elif page == "Register comparison":
         saved_choices = {}
         for _, row in saved_comparisons_df.iterrows():
             visible = (
-                f"{clean_text(row['comparison_name'])} Â· "
-                f"{clean_text(row['register_a_label'])} vs {clean_text(row['register_b_label'])} Â· "
+                f"{clean_text(row['comparison_name'])} · "
+                f"{clean_text(row['register_a_label'])} vs {clean_text(row['register_b_label'])} · "
                 f"{clean_text(row['created_at'])}"
             )
             saved_choices[visible] = int(row["comparison_id"])
@@ -2824,10 +2824,10 @@ elif page == "Register comparison":
                     "project": "Project",
                     "discipline": "Discipline",
                     "document_number": "Document Number",
-                    "title_a": f"Title â€“ {saved_label_a}",
-                    "title_b": f"Title â€“ {saved_label_b}",
-                    "revision_a": f"Revision â€“ {saved_label_a}",
-                    "revision_b": f"Revision â€“ {saved_label_b}",
+                    "title_a": f"Title – {saved_label_a}",
+                    "title_b": f"Title – {saved_label_b}",
+                    "revision_a": f"Revision – {saved_label_a}",
+                    "revision_b": f"Revision – {saved_label_b}",
                     "classification": "Comparison Result",
                     "severity": "Priority",
                     "differing_fields": "Changed Fields",
@@ -2849,14 +2849,14 @@ elif page == "Register comparison":
                 saved_item_choices = {}
                 for index, row in reviewable_saved.iterrows():
                     base = (
-                        f"{clean_text(row['document_number'])} Â· "
-                        f"{clean_text(row['classification'])} Â· "
+                        f"{clean_text(row['document_number'])} · "
+                        f"{clean_text(row['classification'])} · "
                         f"{clean_text(row['review_status'])}"
                     )
                     visible = base
                     counter = 2
                     while visible in saved_item_choices:
-                        visible = f"{base} Â· Entry {counter}"
+                        visible = f"{base} · Entry {counter}"
                         counter += 1
                     saved_item_choices[visible] = index
 
@@ -2894,13 +2894,13 @@ elif page == "Register comparison":
 
                 saved_history_col_a, saved_history_col_b = st.columns(2)
                 with saved_history_col_a:
-                    st.markdown(f"#### Revision history â€“ {saved_label_a}")
+                    st.markdown(f"#### Revision history – {saved_label_a}")
                     if saved_history_a:
                         display_table(pd.DataFrame(saved_history_a), height=250, key="saved_history_a")
                     else:
                         st.info("No matching record.")
                 with saved_history_col_b:
-                    st.markdown(f"#### Revision history â€“ {saved_label_b}")
+                    st.markdown(f"#### Revision history – {saved_label_b}")
                     if saved_history_b:
                         display_table(pd.DataFrame(saved_history_b), height=250, key="saved_history_b")
                     else:
@@ -3279,7 +3279,7 @@ elif page == "PDF intake":
 elif page == "PDF library":
     render_section_header(
         "Controlled PDF library",
-        "Attach a PDF to an existing register record. Files are validated against the selected document number and revision, then stored under Project â†’ Discipline â†’ Document Number.",
+        "Attach a PDF to an existing register record. Files are validated against the selected document number and revision, then stored under Project → Discipline → Document Number.",
     )
 
     if documents_df.empty:
@@ -3407,7 +3407,7 @@ elif page == "PDF library":
                     )
                     st.dataframe(check_rows, use_container_width=True, hide_index=True)
                     st.caption(
-                        f"Selected file: {inspection['file_name']} Â· {human_file_size(inspection['file_size'])}"
+                        f"Selected file: {inspection['file_name']} · {human_file_size(inspection['file_size'])}"
                     )
 
                     if inspection["duplicate_file"]:
@@ -3559,7 +3559,7 @@ elif page == "Document register":
         with st.container(border=True):
             filter_header_left, filter_header_right = st.columns([5, 1])
             with filter_header_left:
-                st.markdown("### ðŸ”Ž Filter the register")
+                st.markdown("### 🔎 Filter the register")
                 st.caption(
                     "Use the search box first, then narrow the results by project, discipline or status."
                 )
@@ -3571,7 +3571,7 @@ elif page == "Document register":
                 )
 
             search_text = st.text_input(
-                "ðŸ”Ž Search by document number or title",
+                "🔎 Search by document number or title",
                 placeholder="Enter a document number or document title",
                 key="register_search",
             )
@@ -3580,7 +3580,7 @@ elif page == "Document register":
 
             with project_col:
                 selected_projects = st.multiselect(
-                    "ðŸ“ Project",
+                    "📁 Project",
                     project_values,
                     placeholder="Choose one or more projects",
                     key="register_projects",
@@ -3588,7 +3588,7 @@ elif page == "Document register":
 
             with discipline_col:
                 selected_disciplines = st.multiselect(
-                    "ðŸ§­ Discipline",
+                    "🧭 Discipline",
                     discipline_values,
                     placeholder="Choose one or more disciplines",
                     key="register_disciplines",
@@ -3596,7 +3596,7 @@ elif page == "Document register":
 
             with status_col:
                 selected_statuses = st.multiselect(
-                    "ðŸ·ï¸ Status",
+                    "🏷️ Status",
                     status_values,
                     placeholder="Choose one or more statuses",
                     key="register_statuses",
@@ -3670,7 +3670,7 @@ elif page == "Document register":
                 if label in allowed_labels
             ]
 
-        with st.expander("âš™ï¸ Table view settings", expanded=True):
+        with st.expander("⚙️ Table view settings", expanded=True):
             settings_col_1, settings_col_2, settings_col_3 = st.columns([2.2, 1, 1])
 
             with settings_col_1:
@@ -3813,7 +3813,7 @@ elif page == "Quality review":
 
     st.divider()
 
-    st.subheader("1. Exact duplicate candidates â€” manual approval required")
+    st.subheader("1. Exact duplicate candidates — manual approval required")
     st.caption("Only records with matching project, discipline, document number, title and revision appear here. Nothing is archived automatically.")
     if exact_duplicates_df.empty:
         st.success("No exact duplicate document number and revision combinations were found.")
@@ -3825,7 +3825,7 @@ elif page == "Quality review":
         )
         st.info("Open Manual review to compare metadata and PDFs, add comments, and approve the outcome.")
 
-    st.subheader("2. Revision history â€” information only")
+    st.subheader("2. Revision history — information only")
     st.caption("A document number with different revisions is expected and is not treated as a duplicate error.")
     if revision_groups_df.empty:
         st.info("No documents currently have more than one registered revision.")
@@ -4067,8 +4067,8 @@ elif page == "Manual review":
             else:
                 for entry_number, (_, document_row) in enumerate(case_documents.iterrows(), start=1):
                     label = (
-                        f"Entry {entry_number}: {clean_text(document_row['document_number'])} Â· "
-                        f"{clean_text(document_row['revision']) or 'No revision'} Â· "
+                        f"Entry {entry_number}: {clean_text(document_row['document_number'])} · "
+                        f"{clean_text(document_row['revision']) or 'No revision'} · "
                         f"{clean_text(document_row['title'])}"
                     )
                     with st.expander(label, expanded=False):
@@ -4229,14 +4229,14 @@ elif page == "Manual review":
 
             decision_options = [
                 "Start Review",
-                "Approved â€“ No Change Required",
+                "Approved – No Change Required",
                 "Correction Required",
                 "Not a Duplicate",
                 "Escalated",
                 "Resolved After Correction",
             ]
             if clean_text(case_row["issue_type"]) == "Exact duplicate":
-                decision_options.insert(1, "Approved â€“ Duplicate Archived")
+                decision_options.insert(1, "Approved – Duplicate Archived")
 
             with st.form(f"manual_review_form_{selected_case_id}", border=True):
                 reviewer = st.text_input(
@@ -4249,7 +4249,7 @@ elif page == "Manual review":
                 archive_ids = []
                 move_pdfs = False
 
-                if decision == "Approved â€“ Duplicate Archived" and not case_documents.empty:
+                if decision == "Approved – Duplicate Archived" and not case_documents.empty:
                     record_choices = build_record_choice_map(case_documents)
                     retained_label = st.selectbox(
                         "Record to retain *",
@@ -4289,7 +4289,7 @@ elif page == "Manual review":
                         st.error("Reviewer name is required.")
                     elif not clean_text(comments):
                         st.error("Review comments are required for every decision.")
-                    elif decision == "Approved â€“ Duplicate Archived" and (
+                    elif decision == "Approved – Duplicate Archived" and (
                         retained_id is None or not archive_ids
                     ):
                         st.error("Select one retained record and at least one duplicate copy to archive.")
@@ -4301,7 +4301,7 @@ elif page == "Manual review":
                             "pdf_links_moved": move_pdfs,
                         }
 
-                        if decision == "Approved â€“ Duplicate Archived":
+                        if decision == "Approved – Duplicate Archived":
                             if move_pdfs:
                                 for source_id in archive_ids:
                                     reassign_document_files(source_id, retained_id)
@@ -4366,13 +4366,13 @@ elif page == "Revision history":
         for position, (_, group) in enumerate(family_groups, start=1):
             representative = group.iloc[0]
             label = (
-                f"{clean_text(representative['project']) or 'Project not set'} Â· "
-                f"{clean_text(representative['discipline']) or 'Discipline not set'} Â· "
-                f"{clean_text(representative['document_number'])} Â· "
+                f"{clean_text(representative['project']) or 'Project not set'} · "
+                f"{clean_text(representative['discipline']) or 'Discipline not set'} · "
+                f"{clean_text(representative['document_number'])} · "
                 f"{clean_text(representative['title'])}"
             )
             if label in families:
-                label = f"{label} Â· Family {position}"
+                label = f"{label} · Family {position}"
             families[label] = group.index.tolist()
 
         selected_family_label = st.selectbox(
@@ -4427,7 +4427,7 @@ elif page == "Revision history":
         for entry_number, (_, document_row) in enumerate(history.iterrows(), start=1):
             label = (
                 f"{clean_text(document_row['revision_role'])}: "
-                f"{clean_text(document_row['revision']) or 'No revision'} Â· "
+                f"{clean_text(document_row['revision']) or 'No revision'} · "
                 f"{clean_text(document_row['created_date']) or 'Created date not set'}"
             )
             with st.expander(label, expanded=entry_number == 1):
