@@ -79,7 +79,6 @@ COMPARISON_METADATA_FIELDS = [
     "owner",
     "originator",
     "created_date",
-    "due_date",
     "file_name",
     "notes",
 ]
@@ -135,7 +134,6 @@ QUALITY_FIELDS = [
     "owner",
     "originator",
     "created_date",
-    "due_date",
     "file_name",
     "notes",
 ]
@@ -150,7 +148,6 @@ DISPLAY_COLUMNS = [
     "owner",
     "originator",
     "created_date",
-    "due_date",
     "file_name",
     "pdf_count",
     "notes",
@@ -1551,34 +1548,6 @@ def build_review_queue(df):
                 title=clean_text(conflict["titles"]),
             )
 
-    overdue = find_overdue_documents(df)
-    if not overdue.empty:
-        for _, row in overdue.iterrows():
-            add_finding(
-                "Overdue open record",
-                "Warning",
-                row["id"],
-                [row["id"]],
-                row["document_number"],
-                row["revision"],
-                f"Open record is {int(row['days_overdue'])} day(s) overdue",
-                "Review the document status and due date, then record the decision",
-            )
-
-    date_issues = find_date_sequence_issues(df)
-    if not date_issues.empty:
-        for _, row in date_issues.iterrows():
-            add_finding(
-                "Date sequence issue",
-                "Warning",
-                row["id"],
-                [row["id"]],
-                row["document_number"],
-                row["revision"],
-                "Created date is later than due date",
-                "Inspect the dates and approve a correction or escalation",
-            )
-
     filename_issues = find_filename_issues(df)
     if not filename_issues.empty:
         for _, row in filename_issues.iterrows():
@@ -1700,6 +1669,9 @@ def display_table(
         "remove_id",
         "comparison_id",
         "comparison_item_id",
+        "issue_key",
+        "related_document_ids",
+        "duplicate_group",
     }
     display_df = display_df.drop(
         columns=[
@@ -1931,7 +1903,6 @@ open_review_cases_df = review_cases_df[
 exact_duplicates_df = find_exact_duplicates(documents_df)
 metadata_conflicts_df = find_metadata_conflicts(documents_df)
 revision_groups_df = find_revision_groups(documents_df)
-overdue_df = find_overdue_documents(documents_df)
 health_score = calculate_health_score(documents_df, review_queue_df)
 
 if health_score >= 85:
@@ -2254,7 +2225,7 @@ elif page == "Add document":
                 placeholder="Example: Design Contractor",
             )
             created_date = st.date_input("Created Date", value=None)
-            due_date = st.date_input("Due Date", value=None)
+            due_date = st.date_input("Due Date (optional)", value=None)
             file_name = st.text_input(
                 "File Name",
                 placeholder="Example: RWE-ENG-DRG-0001_P01.pdf",
@@ -2312,7 +2283,7 @@ elif page == "Add document":
                 and due_date is not None
                 and created_date > due_date
             ):
-                st.error("Created Date cannot be later than Due Date.")
+                st.error("When a Due Date is provided, Created Date cannot be later than it.")
             else:
                 possible_duplicate = make_document_key(
                     document_number,
@@ -2369,7 +2340,7 @@ elif page == "Import CSV":
                 "owner": "Document Control Team",
                 "originator": "Design Contractor",
                 "created_date": "2026-06-19",
-                "due_date": "2026-06-26",
+                "due_date": "",
                 "file_name": "RWE-ENG-DRG-0001_P01.pdf",
                 "notes": "Initial submission",
             }
@@ -3266,7 +3237,7 @@ elif page == "PDF intake":
                             ),
                         )
                         intake_due_date = st.date_input(
-                            "Due Date",
+                            "Due Date (optional)",
                             value=optional_date_value(
                                 extracted.get("due_date", "")
                             ),
@@ -3348,7 +3319,7 @@ elif page == "PDF intake":
                         and intake_due_date is not None
                         and intake_created_date > intake_due_date
                     ):
-                        st.error("Created Date cannot be later than Due Date.")
+                        st.error("When a Due Date is provided, Created Date cannot be later than it.")
                     else:
                         possible_duplicate = make_document_key(
                             intake_document["document_number"],
@@ -3580,7 +3551,6 @@ elif page == "Documents":
             "revision",
             "status",
             "owner",
-            "due_date",
             "pdf_count",
         ]
         register_rename = {
@@ -3591,7 +3561,6 @@ elif page == "Documents":
             "revision": "Revision",
             "status": "Status",
             "owner": "Owner",
-            "due_date": "Due Date",
             "pdf_count": "PDF Files",
         }
 
@@ -3614,7 +3583,6 @@ elif page == "Documents":
                     "Revision": st.column_config.TextColumn(width="small"),
                     "Status": st.column_config.TextColumn(width="medium"),
                     "Owner": st.column_config.TextColumn(width="medium"),
-                    "Due Date": st.column_config.TextColumn(width="small"),
                     "PDF Files": st.column_config.NumberColumn(width="small"),
                 },
                 key="documents_register_table",
@@ -3676,9 +3644,6 @@ elif page == "Documents":
                         ),
                         "Created Date": clean_text(
                             selected_record.get("created_date", "")
-                        ),
-                        "Due Date": clean_text(
-                            selected_record.get("due_date", "")
                         ),
                     }
                 ]
@@ -3862,7 +3827,6 @@ elif page == "Quality review":
     )
 
     missing_df = find_missing_metadata(documents_df)
-    date_issues_df = find_date_sequence_issues(documents_df)
     filename_issues_df = find_filename_issues(documents_df)
 
     render_metric_cards(
@@ -3871,17 +3835,20 @@ elif page == "Quality review":
             ("Detected findings", len(review_queue_df), "Synced to manual review", "health-watch" if len(review_queue_df) else "health-good"),
             ("Exact duplicate groups", duplicate_group_count, "Same project + discipline + number + title + revision", "health-risk" if duplicate_group_count else "health-good"),
             ("Missing metadata", len(missing_df), "Records affected", "health-watch" if len(missing_df) else "health-good"),
-            ("Overdue records", len(overdue_df), "Open and past due", "health-risk" if len(overdue_df) else "health-good"),
             ("Missing PDF files", len(missing_pdf_df), "Register rows without attachment", "health-watch" if len(missing_pdf_df) else "health-good"),
         ]
     )
 
-    st.subheader("Detected findings")
+    st.subheader("Issues found")
     if review_queue_df.empty:
-        st.success("No automated quality findings are currently open.")
+        st.success("No document issues are currently open.")
     else:
+        st.caption(
+            "These are possible issues found by the assistant. "
+            "Internal reference numbers are hidden because they are not useful to the reviewer."
+        )
         severity_filter = st.multiselect(
-            "Filter by severity",
+            "Show severity",
             ["Critical", "Warning", "Review"],
             default=["Critical", "Warning", "Review"],
         )
@@ -3890,14 +3857,42 @@ elif page == "Quality review":
         ]
         display_table(
             filtered_queue,
+            columns=[
+                "severity",
+                "issue_type",
+                "project",
+                "discipline",
+                "document_number",
+                "title",
+                "revision",
+                "issue",
+                "recommended_action",
+            ],
             rename={
                 "severity": "Severity",
+                "issue_type": "Issue Type",
+                "project": "Project",
+                "discipline": "Discipline",
                 "document_number": "Document Number",
+                "title": "Title",
                 "revision": "Revision",
-                "issue": "Issue",
-                "recommended_action": "Recommended Action",
+                "issue": "What Was Found",
+                "recommended_action": "What To Do",
             },
             height=430,
+            row_height=38,
+            column_config={
+                "Severity": st.column_config.TextColumn(width="small"),
+                "Issue Type": st.column_config.TextColumn(width="medium"),
+                "Project": st.column_config.TextColumn(width="medium"),
+                "Discipline": st.column_config.TextColumn(width="small"),
+                "Document Number": st.column_config.TextColumn(width="medium"),
+                "Title": st.column_config.TextColumn(width="large"),
+                "Revision": st.column_config.TextColumn(width="small"),
+                "What Was Found": st.column_config.TextColumn(width="large"),
+                "What To Do": st.column_config.TextColumn(width="large"),
+            },
+            key="quality_findings_table",
         )
 
     st.divider()
@@ -3938,39 +3933,6 @@ elif page == "Quality review":
             st.success("No required metadata is missing.")
         else:
             display_table(missing_df, height=300)
-
-    with st.expander("Overdue open records", expanded=False):
-        if overdue_df.empty:
-            st.success("No open records are overdue.")
-        else:
-            display_table(
-                overdue_df,
-                columns=[
-                    "document_number",
-                    "revision",
-                    "title",
-                    "status",
-                    "owner",
-                    "due_date",
-                    "days_overdue",
-                ],
-                height=300,
-            )
-
-    with st.expander("Date sequence issues", expanded=False):
-        if date_issues_df.empty:
-            st.success("No records have a created date later than their due date.")
-        else:
-            display_table(
-                date_issues_df,
-                columns=[
-                    "document_number",
-                    "revision",
-                    "created_date",
-                    "due_date",
-                ],
-                height=260,
-            )
 
     with st.expander("Filename convention review", expanded=False):
         if filename_issues_df.empty:
@@ -4246,7 +4208,7 @@ elif page == "Manual review":
                                 value=optional_date_value(correction_row.get("created_date", "")),
                             )
                             corrected_due_date = st.date_input(
-                                "Due Date",
+                                "Due Date (optional)",
                                 value=optional_date_value(correction_row.get("due_date", "")),
                             )
                             corrected_file_name = st.text_input(
@@ -4631,7 +4593,7 @@ elif page == "Administration":
                         value=optional_date_value(selected_row.get("created_date", "")),
                     )
                     administration_due_date = st.date_input(
-                        "Due Date",
+                        "Due Date (optional)",
                         value=optional_date_value(selected_row.get("due_date", "")),
                     )
                     administration_file_name = st.text_input(
