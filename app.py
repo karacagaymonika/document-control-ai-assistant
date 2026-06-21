@@ -207,6 +207,53 @@ APP_CSS = """
         background: rgba(255,255,255,0.08);
     }
 
+    /* Sidebar navigation buttons: always readable */
+    [data-testid="stSidebar"] div.stButton > button {
+        width: 100%;
+        min-height: 2.55rem;
+        height: auto;
+        padding: 0.55rem 0.7rem;
+        justify-content: flex-start;
+        text-align: left;
+        white-space: normal;
+        line-height: 1.2;
+        border-radius: 9px;
+        background: rgba(255,255,255,0.07) !important;
+        border: 1px solid rgba(255,255,255,0.16) !important;
+        color: #f4f7fb !important;
+        box-shadow: none !important;
+    }
+
+    [data-testid="stSidebar"] div.stButton > button p,
+    [data-testid="stSidebar"] div.stButton > button span {
+        color: #f4f7fb !important;
+        font-weight: 650 !important;
+        opacity: 1 !important;
+    }
+
+    [data-testid="stSidebar"] div.stButton > button:hover {
+        background: rgba(255,255,255,0.14) !important;
+        border-color: rgba(255,255,255,0.28) !important;
+        color: #ffffff !important;
+    }
+
+    [data-testid="stSidebar"] div.stButton > button[kind="primary"] {
+        background: #2f6fed !important;
+        border-color: #2f6fed !important;
+        color: #ffffff !important;
+    }
+
+    [data-testid="stSidebar"] div.stButton > button[kind="primary"] p,
+    [data-testid="stSidebar"] div.stButton > button[kind="primary"] span {
+        color: #ffffff !important;
+    }
+
+    [data-testid="stSidebar"] h4 {
+        margin-top: 0.8rem;
+        margin-bottom: 0.35rem;
+        color: #ffffff !important;
+    }
+
     .hero {
         padding: 1.65rem 1.9rem;
         border-radius: 18px;
@@ -1902,27 +1949,123 @@ else:
 # Sidebar and page shell
 # -----------------------------
 
+def set_active_page(target_page):
+    st.session_state["active_page"] = target_page
+
+
+valid_pages = {
+    "Dashboard",
+    "Add document",
+    "Import CSV",
+    "PDF intake",
+    "Documents",
+    "Register comparison",
+    "Quality review",
+    "Manual review",
+    "Revision history",
+    "Administration",
+}
+
+if st.session_state.get("active_page") not in valid_pages:
+    st.session_state["active_page"] = "Dashboard"
+
+
 with st.sidebar:
-    st.markdown("## 📑 Document Control")
+    st.markdown("## Document Control")
     st.caption("Register governance workspace")
 
-    page = st.radio(
-        "Navigation",
-        [
-            "Dashboard",
-            "Add document",
-            "Import CSV",
-            "Register comparison",
-            "PDF intake",
-            "PDF library",
-            "Document register",
-            "Quality review",
-            "Manual review",
-            "Revision history",
-            "Administration",
-        ],
-        label_visibility="collapsed",
+    active_page = st.session_state["active_page"]
+
+    st.button(
+        "Dashboard",
+        key="nav_dashboard",
+        type="primary" if active_page == "Dashboard" else "secondary",
+        use_container_width=True,
+        on_click=set_active_page,
+        args=("Dashboard",),
     )
+
+    st.markdown("#### Add document")
+    st.button(
+        "Add manually",
+        key="nav_add_manually",
+        type="primary" if active_page == "Add document" else "secondary",
+        use_container_width=True,
+        on_click=set_active_page,
+        args=("Add document",),
+    )
+    st.button(
+        "Import CSV register",
+        key="nav_import_csv",
+        type="primary" if active_page == "Import CSV" else "secondary",
+        use_container_width=True,
+        on_click=set_active_page,
+        args=("Import CSV",),
+    )
+    st.button(
+        "Upload PDF and extract information",
+        key="nav_pdf_intake",
+        type="primary" if active_page == "PDF intake" else "secondary",
+        use_container_width=True,
+        on_click=set_active_page,
+        args=("PDF intake",),
+    )
+
+    st.markdown("#### Manage")
+    st.button(
+        "Documents",
+        key="nav_documents",
+        type="primary" if active_page == "Documents" else "secondary",
+        use_container_width=True,
+        on_click=set_active_page,
+        args=("Documents",),
+    )
+    st.button(
+        "Register comparison",
+        key="nav_register_comparison",
+        type="primary" if active_page == "Register comparison" else "secondary",
+        use_container_width=True,
+        on_click=set_active_page,
+        args=("Register comparison",),
+    )
+
+    st.markdown("#### Review")
+    st.button(
+        "Issues found",
+        key="nav_quality_review",
+        type="primary" if active_page == "Quality review" else "secondary",
+        use_container_width=True,
+        on_click=set_active_page,
+        args=("Quality review",),
+    )
+    st.button(
+        "Review and decide",
+        key="nav_manual_review",
+        type="primary" if active_page == "Manual review" else "secondary",
+        use_container_width=True,
+        on_click=set_active_page,
+        args=("Manual review",),
+    )
+
+    st.markdown("#### History and settings")
+    st.button(
+        "Revision history",
+        key="nav_revision_history",
+        type="primary" if active_page == "Revision history" else "secondary",
+        use_container_width=True,
+        on_click=set_active_page,
+        args=("Revision history",),
+    )
+    st.button(
+        "Administration",
+        key="nav_administration",
+        type="primary" if active_page == "Administration" else "secondary",
+        use_container_width=True,
+        on_click=set_active_page,
+        args=("Administration",),
+    )
+
+    page = st.session_state["active_page"]
 
     st.divider()
     st.markdown("#### Workspace status")
@@ -1931,7 +2074,7 @@ with st.sidebar:
     st.write(f"**{len(missing_pdf_df)}** records without PDF")
     st.write(f"**{len(open_review_cases_df)}** open review cases")
     st.write(f"**{health_score}/100** health score")
-    st.caption("Local SQLite database and file library · Demo data only")
+    st.caption("Local SQLite database and file library - Demo data only")
 
 
 st.markdown(
@@ -3272,273 +3415,28 @@ elif page == "PDF intake":
                                 st.rerun()
 
 
+
 # -----------------------------
-# PDF library
+# Documents
 # -----------------------------
 
-elif page == "PDF library":
+elif page == "Documents":
     render_section_header(
-        "Controlled PDF library",
-        "Attach a PDF to an existing register record. Files are validated against the selected document number and revision, then stored under Project → Discipline → Document Number.",
+        "Documents",
+        "Search the controlled register and manage the PDF files attached to each document record in one place.",
     )
 
     if documents_df.empty:
-        st.info("Add or import document register records before uploading PDF files.")
-    else:
-        project_values = sorted(
-            value
-            for value in documents_df["project"].dropna().astype(str).unique()
-            if clean_text(value)
+        st.info(
+            "No documents have been added yet. Use Add document to enter a record "
+            "manually, import a CSV register or upload a PDF for metadata extraction."
         )
-
-        if not project_values:
-            st.warning("No projects are available. Complete the Project field in the register first.")
-        else:
-            selected_project = st.selectbox("Project", project_values)
-
-            project_records = documents_df[
-                documents_df["project"].map(normalized_key)
-                == normalized_key(selected_project)
-            ].copy()
-
-            discipline_values = sorted(
-                value
-                for value in project_records["discipline"].dropna().astype(str).unique()
-                if clean_text(value)
-            )
-
-            selected_discipline = st.selectbox(
-                "Discipline",
-                discipline_values if discipline_values else ["Unassigned"],
-            )
-
-            if selected_discipline == "Unassigned":
-                discipline_records = project_records[
-                    project_records["discipline"].map(clean_text) == ""
-                ].copy()
-            else:
-                discipline_records = project_records[
-                    project_records["discipline"].map(normalized_key)
-                    == normalized_key(selected_discipline)
-                ].copy()
-
-            attached_count = int(
-                pd.to_numeric(discipline_records.get("pdf_count", 0), errors="coerce")
-                .fillna(0)
-                .sum()
-            ) if not discipline_records.empty else 0
-            missing_count = int(
-                (pd.to_numeric(discipline_records.get("pdf_count", 0), errors="coerce").fillna(0) == 0).sum()
-            ) if not discipline_records.empty else 0
-
-            render_metric_cards(
-                [
-                    ("Project records", len(project_records), selected_project, ""),
-                    ("Discipline records", len(discipline_records), selected_discipline, ""),
-                    ("Attached PDFs", attached_count, "Files in this discipline", ""),
-                    ("Missing PDFs", missing_count, "Register rows without a file", "health-watch" if missing_count else "health-good"),
-                ]
-            )
-
-            st.subheader("Upload and match a PDF")
-
-            if discipline_records.empty:
-                st.info("No register records match this Project and Discipline selection.")
-            else:
-                record_choices = build_record_choice_map(discipline_records)
-
-                selected_record_label = st.selectbox(
-                    "Register record",
-                    list(record_choices.keys()),
-                )
-                selected_record_id = record_choices[selected_record_label]
-                selected_record = discipline_records[
-                    discipline_records["id"] == selected_record_id
-                ].iloc[0]
-
-                record_summary = pd.DataFrame(
-                    [
-                        {
-                            "Document Number": clean_text(selected_record["document_number"]),
-                            "Title": clean_text(selected_record["title"]),
-                            "Project": clean_text(selected_record["project"]),
-                            "Discipline": clean_text(selected_record["discipline"]),
-                            "Revision": clean_text(selected_record["revision"]),
-                            "Status": clean_text(selected_record["status"]),
-                            "Attached PDFs": int(selected_record.get("pdf_count", 0) or 0),
-                        }
-                    ]
-                )
-                st.dataframe(record_summary, use_container_width=True, hide_index=True)
-
-                uploaded_pdf = st.file_uploader(
-                    "Choose the controlled PDF",
-                    type=["pdf"],
-                    accept_multiple_files=False,
-                    key=f"pdf_upload_{selected_record_id}",
-                )
-
-                if uploaded_pdf is not None:
-                    inspection = inspect_pdf_upload(uploaded_pdf, selected_record)
-
-                    check_rows = pd.DataFrame(
-                        [
-                            {
-                                "Check": "Valid PDF file",
-                                "Result": "Pass" if inspection["valid_header"] else "Fail",
-                                "Expected": "File begins with a valid PDF signature",
-                            },
-                            {
-                                "Check": "Document number in filename",
-                                "Result": "Pass" if inspection["document_number_match"] else "Review",
-                                "Expected": clean_text(selected_record["document_number"]),
-                            },
-                            {
-                                "Check": "Revision in filename",
-                                "Result": "Pass" if inspection["revision_match"] else "Review",
-                                "Expected": clean_text(selected_record["revision"]) or "No revision required",
-                            },
-                            {
-                                "Check": "Identical file already stored",
-                                "Result": "Fail" if inspection["duplicate_file"] else "Pass",
-                                "Expected": "Unique PDF content",
-                            },
-                        ]
-                    )
-                    st.dataframe(check_rows, use_container_width=True, hide_index=True)
-                    st.caption(
-                        f"Selected file: {inspection['file_name']} · {human_file_size(inspection['file_size'])}"
-                    )
-
-                    if inspection["duplicate_file"]:
-                        duplicate = inspection["duplicate_file"]
-                        st.error(
-                            "This exact PDF is already stored against "
-                            f"{duplicate['document_number']} revision {duplicate['revision'] or 'not set'}."
-                        )
-                    elif not inspection["valid_header"]:
-                        st.error("The uploaded file does not contain a valid PDF signature.")
-                    else:
-                        naming_matches = (
-                            inspection["document_number_match"]
-                            and inspection["revision_match"]
-                        )
-
-                        allow_mismatch = False
-                        if not naming_matches:
-                            st.warning(
-                                "The PDF filename does not fully match the selected register record. Review the document number and revision before saving."
-                            )
-                            allow_mismatch = st.checkbox(
-                                "I reviewed the mismatch and confirm that this PDF belongs to the selected record.",
-                                key=f"allow_pdf_mismatch_{selected_record_id}_{inspection['file_hash'][:8]}",
-                            )
-
-                        can_store = naming_matches or allow_mismatch
-
-                        if st.button(
-                            "Save PDF to controlled library",
-                            type="primary",
-                            disabled=not can_store,
-                            use_container_width=True,
-                        ):
-                            target_path = build_pdf_storage_path(
-                                selected_record,
-                                inspection["file_name"],
-                                inspection["file_hash"],
-                            )
-                            target_path.write_bytes(inspection["file_bytes"])
-
-                            try:
-                                add_document_file(
-                                    {
-                                        "document_id": selected_record_id,
-                                        "project": clean_text(selected_record["project"]),
-                                        "discipline": clean_text(selected_record["discipline"]),
-                                        "original_file_name": inspection["file_name"],
-                                        "stored_file_name": target_path.name,
-                                        "stored_path": str(target_path),
-                                        "mime_type": "application/pdf",
-                                        "file_size": inspection["file_size"],
-                                        "sha256": inspection["file_hash"],
-                                    }
-                                )
-                            except Exception:
-                                if target_path.exists():
-                                    target_path.unlink()
-                                raise
-
-                            st.session_state["flash_message"] = (
-                                "success",
-                                "PDF uploaded, validated and linked to the selected register record.",
-                            )
-                            st.rerun()
-
-            st.divider()
-            st.subheader("Project and discipline file audit")
-            st.caption(
-                "This view checks the selected register group against the PDF files stored in the system."
-            )
-
-            if discipline_records.empty:
-                st.info("No records are available for this group.")
-            else:
-                audit_df = discipline_records[
-                    [
-                        "document_number",
-                        "title",
-                        "revision",
-                        "status",
-                        "owner",
-                        "pdf_count",
-                    ]
-                ].copy()
-                audit_df["file_record_check"] = audit_df["pdf_count"].apply(
-                    lambda count: "PDF attached" if int(count or 0) > 0 else "Missing PDF"
-                )
-                audit_df = audit_df.rename(
-                    columns={
-                        "document_number": "Document Number",
-                        "title": "Title",
-                        "revision": "Revision",
-                        "status": "Status",
-                        "owner": "Owner",
-                        "pdf_count": "PDF Count",
-                        "file_record_check": "File Record Check",
-                    }
-                )
-                st.dataframe(audit_df, use_container_width=True, hide_index=True, height=360)
-
-                group_files = get_document_files(
-                    project=selected_project,
-                    discipline="" if selected_discipline == "Unassigned" else selected_discipline,
-                )
-                st.subheader("Stored PDFs in this group")
-                render_attached_files(
-                    group_files,
-                    key_prefix=f"group_{safe_folder_name(selected_project)}_{safe_folder_name(selected_discipline)}",
-                    allow_delete=False,
-                )
-
-
-# -----------------------------
-# Register
-# -----------------------------
-
-elif page == "Document register":
-    render_section_header(
-        "Document register",
-        "Search by document number or title, then filter and export the controlled register. Different revisions remain visible as separate records.",
-    )
-
-    if documents_df.empty:
-        st.info("No documents have been added yet.")
     else:
-        def clear_register_filters():
-            st.session_state["register_search"] = ""
-            st.session_state["register_projects"] = []
-            st.session_state["register_disciplines"] = []
-            st.session_state["register_statuses"] = []
+        def clear_documents_filters():
+            st.session_state["documents_search"] = ""
+            st.session_state["documents_projects"] = []
+            st.session_state["documents_disciplines"] = []
+            st.session_state["documents_statuses"] = []
 
         project_values = sorted(
             value
@@ -3558,84 +3456,133 @@ elif page == "Document register":
 
         with st.container(border=True):
             filter_header_left, filter_header_right = st.columns([5, 1])
+
             with filter_header_left:
-                st.markdown("### 🔎 Filter the register")
+                st.markdown("### Filter documents")
                 st.caption(
-                    "Use the search box first, then narrow the results by project, discipline or status."
+                    "Search by document number or title, then narrow the results "
+                    "by project, discipline or status."
                 )
+
             with filter_header_right:
                 st.button(
                     "Clear filters",
-                    on_click=clear_register_filters,
+                    on_click=clear_documents_filters,
                     use_container_width=True,
+                    key="clear_documents_filters",
                 )
 
             search_text = st.text_input(
-                "🔎 Search by document number or title",
+                "Search by document number or title",
                 placeholder="Enter a document number or document title",
-                key="register_search",
+                key="documents_search",
             )
 
             project_col, discipline_col, status_col = st.columns(3, gap="large")
 
             with project_col:
                 selected_projects = st.multiselect(
-                    "📁 Project",
+                    "Project",
                     project_values,
                     placeholder="Choose one or more projects",
-                    key="register_projects",
+                    key="documents_projects",
                 )
 
             with discipline_col:
                 selected_disciplines = st.multiselect(
-                    "🧭 Discipline",
+                    "Discipline",
                     discipline_values,
                     placeholder="Choose one or more disciplines",
-                    key="register_disciplines",
+                    key="documents_disciplines",
                 )
 
             with status_col:
                 selected_statuses = st.multiselect(
-                    "🏷️ Status",
+                    "Status",
                     status_values,
                     placeholder="Choose one or more statuses",
-                    key="register_statuses",
+                    key="documents_statuses",
                 )
 
-        filtered = documents_df.copy()
+        filtered_documents = documents_df.copy()
 
         if search_text:
             search_key = normalized_key(search_text)
             searchable = (
-                filtered["document_number"].fillna("").astype(str)
+                filtered_documents["document_number"].fillna("").astype(str)
                 + " "
-                + filtered["title"].fillna("").astype(str)
+                + filtered_documents["title"].fillna("").astype(str)
             ).str.casefold()
-            filtered = filtered[searchable.str.contains(re.escape(search_key), na=False)]
+            filtered_documents = filtered_documents[
+                searchable.str.contains(re.escape(search_key), na=False)
+            ]
 
         if selected_projects:
-            filtered = filtered[filtered["project"].isin(selected_projects)]
-
-        if selected_statuses:
-            filtered = filtered[filtered["status"].isin(selected_statuses)]
+            filtered_documents = filtered_documents[
+                filtered_documents["project"].isin(selected_projects)
+            ]
 
         if selected_disciplines:
-            filtered = filtered[filtered["discipline"].isin(selected_disciplines)]
-
-        render_metric_cards(
-            [
-                ("Matching records", len(filtered), "Current filtered view", ""),
-                ("Total records", len(documents_df), "Complete register", ""),
-                ("Unique documents", filtered["document_number"].map(normalized_key).nunique(), "In current view", ""),
-                ("PDF files", int(pd.to_numeric(filtered.get("pdf_count", 0), errors="coerce").fillna(0).sum()), "In current view", ""),
-                ("Missing PDFs", int((pd.to_numeric(filtered.get("pdf_count", 0), errors="coerce").fillna(0) == 0).sum()), "In current view", "health-watch"),
+            filtered_documents = filtered_documents[
+                filtered_documents["discipline"].isin(selected_disciplines)
             ]
-        )
 
-        filtered = filtered.sort_values(
+        if selected_statuses:
+            filtered_documents = filtered_documents[
+                filtered_documents["status"].isin(selected_statuses)
+            ]
+
+        filtered_documents = filtered_documents.sort_values(
             ["project", "discipline", "document_number", "revision", "id"]
         )
 
+        pdf_total = int(
+            pd.to_numeric(
+                filtered_documents.get("pdf_count", 0),
+                errors="coerce",
+            ).fillna(0).sum()
+        )
+        missing_pdf_total = int(
+            (
+                pd.to_numeric(
+                    filtered_documents.get("pdf_count", 0),
+                    errors="coerce",
+                ).fillna(0)
+                == 0
+            ).sum()
+        )
+
+        render_metric_cards(
+            [
+                ("Matching records", len(filtered_documents), "Current filtered view", ""),
+                ("Total records", len(documents_df), "Complete register", ""),
+                (
+                    "Unique documents",
+                    filtered_documents["document_number"].map(normalized_key).nunique(),
+                    "In current view",
+                    "",
+                ),
+                ("PDF files", pdf_total, "Attached to current records", ""),
+                (
+                    "Missing PDFs",
+                    missing_pdf_total,
+                    "Records without a controlled file",
+                    "health-watch" if missing_pdf_total else "health-good",
+                ),
+            ]
+        )
+
+        register_columns = [
+            "document_number",
+            "title",
+            "project",
+            "discipline",
+            "revision",
+            "status",
+            "owner",
+            "due_date",
+            "pdf_count",
+        ]
         register_rename = {
             "document_number": "Document Number",
             "title": "Title",
@@ -3644,116 +3591,258 @@ elif page == "Document register":
             "revision": "Revision",
             "status": "Status",
             "owner": "Owner",
-            "originator": "Originator",
-            "created_date": "Created Date",
             "due_date": "Due Date",
-            "file_name": "Expected File Name",
             "pdf_count": "PDF Files",
-            "notes": "Notes",
         }
 
-        available_columns = [
-            column
-            for column in DISPLAY_COLUMNS
-            if column in filtered.columns and column != "id"
-        ]
-        label_to_column = {
-            register_rename.get(column, column): column
-            for column in available_columns
-        }
+        st.subheader("Controlled document register")
 
-        if "register_visible_columns" in st.session_state:
-            allowed_labels = set(label_to_column.keys())
-            st.session_state["register_visible_columns"] = [
-                label
-                for label in st.session_state["register_visible_columns"]
-                if label in allowed_labels
-            ]
-
-        with st.expander("⚙️ Table view settings", expanded=True):
-            settings_col_1, settings_col_2, settings_col_3 = st.columns([2.2, 1, 1])
-
-            with settings_col_1:
-                selected_column_labels = st.multiselect(
-                    "Visible columns",
-                    options=list(label_to_column.keys()),
-                    default=list(label_to_column.keys()),
-                    help="Remove columns you do not need. Add them back at any time.",
-                    key="register_visible_columns",
-                )
-
-            with settings_col_2:
-                table_height = st.slider(
-                    "Table height",
-                    min_value=350,
-                    max_value=950,
-                    value=650,
-                    step=50,
-                    key="register_table_height",
-                )
-
-            with settings_col_3:
-                row_height = st.slider(
-                    "Row height",
-                    min_value=26,
-                    max_value=58,
-                    value=34,
-                    step=2,
-                    key="register_row_height",
-                )
-
-            st.caption(
-                "Drag a column border to resize it. Use the fullscreen icon in the table toolbar to inspect every column on a larger canvas."
-            )
-
-        selected_columns = [
-            label_to_column[label]
-            for label in selected_column_labels
-            if label in label_to_column
-        ]
-
-        if not selected_columns:
-            st.warning("Select at least one visible column in Table view settings.")
+        if filtered_documents.empty:
+            st.info("No documents match the selected filters.")
         else:
-            column_config = {
-                "Document Number": st.column_config.TextColumn(width="medium"),
-                "Title": st.column_config.TextColumn(width="large"),
-                "Project": st.column_config.TextColumn(width="medium"),
-                "Discipline": st.column_config.TextColumn(width="medium"),
-                "Revision": st.column_config.TextColumn(width="small"),
-                "Status": st.column_config.TextColumn(width="medium"),
-                "Owner": st.column_config.TextColumn(width="medium"),
-                "Originator": st.column_config.TextColumn(width="medium"),
-                "Created Date": st.column_config.TextColumn(width="small"),
-                "Due Date": st.column_config.TextColumn(width="small"),
-                "Expected File Name": st.column_config.TextColumn(width="large"),
-                "PDF Files": st.column_config.NumberColumn(width="small"),
-                "Notes": st.column_config.TextColumn(width="large"),
-            }
-
             display_table(
-                filtered,
-                columns=selected_columns,
+                filtered_documents,
+                columns=register_columns,
                 rename=register_rename,
-                height=table_height,
-                row_height=row_height,
-                column_config=column_config,
-                key="document_register_table",
+                height=430,
+                row_height=34,
+                column_config={
+                    "Document Number": st.column_config.TextColumn(width="medium"),
+                    "Title": st.column_config.TextColumn(width="large"),
+                    "Project": st.column_config.TextColumn(width="medium"),
+                    "Discipline": st.column_config.TextColumn(width="medium"),
+                    "Revision": st.column_config.TextColumn(width="small"),
+                    "Status": st.column_config.TextColumn(width="medium"),
+                    "Owner": st.column_config.TextColumn(width="medium"),
+                    "Due Date": st.column_config.TextColumn(width="small"),
+                    "PDF Files": st.column_config.NumberColumn(width="small"),
+                },
+                key="documents_register_table",
             )
 
-        export_col_1, export_col_2 = st.columns([1, 4])
-        with export_col_1:
-            st.download_button(
-                "Export current view as CSV",
-                data=filtered.drop(columns=["id"], errors="ignore").to_csv(index=False).encode("utf-8-sig"),
-                file_name="document_register_export.csv",
-                mime="text/csv",
-                use_container_width=True,
-            )
-        with export_col_2:
+            export_left, export_right = st.columns([1, 4])
+            with export_left:
+                st.download_button(
+                    "Export current view",
+                    data=filtered_documents.drop(
+                        columns=["id"], errors="ignore"
+                    ).to_csv(index=False).encode("utf-8-sig"),
+                    file_name="document_register_export.csv",
+                    mime="text/csv",
+                    use_container_width=True,
+                    key="documents_export",
+                )
+            with export_right:
+                st.caption(
+                    f"The export contains {len(filtered_documents)} filtered record(s)."
+                )
+
+            st.divider()
+            st.subheader("Document details and attached PDFs")
             st.caption(
-                f"Export includes {len(filtered)} filtered record(s) and the selected register fields."
+                "Select a register record to review its metadata, download its PDFs "
+                "or attach another controlled PDF."
             )
+
+            record_choices = build_record_choice_map(filtered_documents)
+            selected_record_label = st.selectbox(
+                "Select a document record",
+                list(record_choices.keys()),
+                key="documents_selected_record",
+            )
+            selected_record_id = record_choices[selected_record_label]
+            selected_record = filtered_documents[
+                filtered_documents["id"] == selected_record_id
+            ].iloc[0]
+
+            details_df = pd.DataFrame(
+                [
+                    {
+                        "Document Number": clean_text(
+                            selected_record.get("document_number", "")
+                        ),
+                        "Title": clean_text(selected_record.get("title", "")),
+                        "Project": clean_text(selected_record.get("project", "")),
+                        "Discipline": clean_text(
+                            selected_record.get("discipline", "")
+                        ),
+                        "Revision": clean_text(
+                            selected_record.get("revision", "")
+                        ),
+                        "Status": clean_text(selected_record.get("status", "")),
+                        "Owner": clean_text(selected_record.get("owner", "")),
+                        "Originator": clean_text(
+                            selected_record.get("originator", "")
+                        ),
+                        "Created Date": clean_text(
+                            selected_record.get("created_date", "")
+                        ),
+                        "Due Date": clean_text(
+                            selected_record.get("due_date", "")
+                        ),
+                    }
+                ]
+            )
+            st.dataframe(details_df, use_container_width=True, hide_index=True)
+
+            selected_files = get_document_files(
+                document_id=int(selected_record_id)
+            )
+
+            st.markdown("#### Attached PDF files")
+            render_attached_files(
+                selected_files,
+                key_prefix=f"documents_{selected_record_id}",
+                allow_delete=False,
+            )
+
+            st.markdown("#### Attach another PDF")
+            uploaded_pdf = st.file_uploader(
+                "Choose the controlled PDF",
+                type=["pdf"],
+                accept_multiple_files=False,
+                key=f"documents_pdf_upload_{selected_record_id}",
+            )
+
+            if uploaded_pdf is not None:
+                inspection = inspect_pdf_upload(uploaded_pdf, selected_record)
+
+                check_rows = pd.DataFrame(
+                    [
+                        {
+                            "Check": "Valid PDF file",
+                            "Result": (
+                                "Pass"
+                                if inspection["valid_header"]
+                                else "Fail"
+                            ),
+                            "Expected": "A valid PDF signature",
+                        },
+                        {
+                            "Check": "Document number in filename",
+                            "Result": (
+                                "Pass"
+                                if inspection["document_number_match"]
+                                else "Review"
+                            ),
+                            "Expected": clean_text(
+                                selected_record.get("document_number", "")
+                            ),
+                        },
+                        {
+                            "Check": "Revision in filename",
+                            "Result": (
+                                "Pass"
+                                if inspection["revision_match"]
+                                else "Review"
+                            ),
+                            "Expected": (
+                                clean_text(
+                                    selected_record.get("revision", "")
+                                )
+                                or "No revision required"
+                            ),
+                        },
+                        {
+                            "Check": "Identical file already stored",
+                            "Result": (
+                                "Fail"
+                                if inspection["duplicate_file"]
+                                else "Pass"
+                            ),
+                            "Expected": "Unique PDF content",
+                        },
+                    ]
+                )
+                st.dataframe(
+                    check_rows,
+                    use_container_width=True,
+                    hide_index=True,
+                )
+                st.caption(
+                    f"Selected file: {inspection['file_name']} · "
+                    f"{human_file_size(inspection['file_size'])}"
+                )
+
+                if inspection["duplicate_file"]:
+                    duplicate = inspection["duplicate_file"]
+                    st.error(
+                        "This exact PDF is already stored against "
+                        f"{duplicate['document_number']} revision "
+                        f"{duplicate['revision'] or 'not set'}."
+                    )
+                elif not inspection["valid_header"]:
+                    st.error(
+                        "The uploaded file does not contain a valid PDF signature."
+                    )
+                else:
+                    naming_matches = (
+                        inspection["document_number_match"]
+                        and inspection["revision_match"]
+                    )
+                    allow_mismatch = False
+
+                    if not naming_matches:
+                        st.warning(
+                            "The PDF filename does not fully match the selected "
+                            "document number and revision."
+                        )
+                        allow_mismatch = st.checkbox(
+                            "I reviewed the mismatch and confirm that this PDF "
+                            "belongs to the selected record.",
+                            key=(
+                                f"documents_allow_mismatch_{selected_record_id}_"
+                                f"{inspection['file_hash'][:8]}"
+                            ),
+                        )
+
+                    can_store = naming_matches or allow_mismatch
+
+                    if st.button(
+                        "Save PDF to this document",
+                        type="primary",
+                        disabled=not can_store,
+                        use_container_width=True,
+                        key=(
+                            f"documents_save_pdf_{selected_record_id}_"
+                            f"{inspection['file_hash'][:8]}"
+                        ),
+                    ):
+                        target_path = build_pdf_storage_path(
+                            selected_record,
+                            inspection["file_name"],
+                            inspection["file_hash"],
+                        )
+                        target_path.write_bytes(inspection["file_bytes"])
+
+                        try:
+                            add_document_file(
+                                {
+                                    "document_id": int(selected_record_id),
+                                    "project": clean_text(
+                                        selected_record.get("project", "")
+                                    ),
+                                    "discipline": clean_text(
+                                        selected_record.get("discipline", "")
+                                    ),
+                                    "original_file_name": inspection["file_name"],
+                                    "stored_file_name": target_path.name,
+                                    "stored_path": str(target_path),
+                                    "mime_type": "application/pdf",
+                                    "file_size": inspection["file_size"],
+                                    "sha256": inspection["file_hash"],
+                                }
+                            )
+                        except Exception:
+                            if target_path.exists():
+                                target_path.unlink()
+                            raise
+
+                        st.session_state["flash_message"] = (
+                            "success",
+                            "PDF uploaded and linked to the selected document.",
+                        )
+                        st.rerun()
 
 
 # -----------------------------
@@ -3762,8 +3851,8 @@ elif page == "Document register":
 
 elif page == "Quality review":
     render_section_header(
-        "Assistant quality review",
-        "Automated checks identify possible issues, but every decision is completed by a person with a reviewer name, approval decision and comments.",
+        "Issues found",
+        "See the register problems detected by the assistant. Nothing is changed automatically.",
     )
 
     duplicate_group_count = (
@@ -3914,13 +4003,16 @@ elif page == "Quality review":
 
 elif page == "Manual review":
     render_section_header(
-        "Manual document review",
-        "Inspect the affected records and PDFs, record a reviewer, add mandatory comments and approve the decision. The system never archives uncertain records automatically.",
+        "Review and decide",
+        "Open a review case, inspect the record and attached PDF, choose a decision, add comments and save.",
     )
 
-    st.info(
-        "Document titles are not unique identifiers. Records with the same title but different document numbers are allowed and are not treated as conflicts. A title conflict is raised only when the same project, discipline, document number and revision have different titles."
-    )
+    with st.expander("How title conflicts are identified", expanded=False):
+        st.info(
+            "Documents may have the same title when their document numbers are different. "
+            "A title conflict is raised only when the same project, discipline, document "
+            "number and revision have different titles."
+        )
 
     if review_cases_df.empty:
         st.success("No review cases have been created.")
