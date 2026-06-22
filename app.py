@@ -1,4 +1,4 @@
-﻿import hashlib
+import hashlib
 import io
 import json
 import re
@@ -9,6 +9,7 @@ import pandas as pd
 import streamlit as st
 
 from pdf_extractor import extract_pdf_metadata
+from excel_extractor import extract_excel_metadata
 
 from database import (
     FILES_ROOT,
@@ -1929,6 +1930,7 @@ valid_pages = {
     "Add document",
     "Import CSV",
     "PDF intake",
+    "Excel intake",
     "Documents",
     "Register comparison",
     "Quality review",
@@ -1980,6 +1982,14 @@ with st.sidebar:
         use_container_width=True,
         on_click=set_active_page,
         args=("PDF intake",),
+    )
+    st.button(
+        "Upload Excel document and extract information",
+        key="nav_excel_intake",
+        type="primary" if active_page == "Excel intake" else "secondary",
+        use_container_width=True,
+        on_click=set_active_page,
+        args=("Excel intake",),
     )
 
     st.markdown("#### Manage")
@@ -2064,6 +2074,7 @@ st.markdown(
             <span class="hero-badge">CSV import</span>
             <span class="hero-badge">Register comparison</span>
             <span class="hero-badge">PDF metadata extraction</span>
+            <span class="hero-badge">Excel document extraction</span>
             <span class="hero-badge">PDF document library</span>
             <span class="hero-badge">Project + discipline folders</span>
             <span class="hero-badge">Manual review + approval</span>
@@ -3384,6 +3395,403 @@ elif page == "PDF intake":
                                     "controlled PDF were saved successfully.",
                                 )
                                 st.rerun()
+
+
+
+
+# -----------------------------
+# Excel document intake
+# -----------------------------
+
+elif page == "Excel intake":
+    render_section_header(
+        "Upload Excel document and extract information",
+        "Upload one controlled Excel document, review the detected metadata and save the original workbook with its register record.",
+    )
+
+    st.info(
+        "This page is for one document created in Excel, such as a method statement, "
+        "datasheet, checklist or technical form. Use Import CSV register for files "
+        "containing many document records."
+    )
+
+    uploaded_excel_document = st.file_uploader(
+        "Upload one Excel document",
+        type=["xlsx", "xlsm"],
+        key="excel_document_intake_file",
+        help="Supported formats: .xlsx and .xlsm",
+    )
+
+    if uploaded_excel_document is None:
+        st.markdown(
+            """
+            <div class="notice notice-info">
+                Upload a workbook to preview its first populated sheet and extract
+                document metadata. Nothing is saved until you review and confirm it.
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    else:
+        excel_file_bytes = uploaded_excel_document.getvalue()
+        excel_file_hash = hashlib.sha256(excel_file_bytes).hexdigest()
+        existing_excel_file = find_document_file_by_hash(excel_file_hash)
+
+        if existing_excel_file:
+            st.error(
+                "This exact Excel file is already stored against "
+                f"{clean_text(existing_excel_file.get('document_number', 'a document'))} "
+                f"revision {clean_text(existing_excel_file.get('revision', '')) or 'not set'}."
+            )
+        else:
+            try:
+                excel_result = extract_excel_metadata(excel_file_bytes)
+            except Exception as error:
+                st.error(
+                    "The Excel document could not be read. Check that it is a valid "
+                    ".xlsx or .xlsm workbook and is not password protected."
+                )
+                st.code(str(error))
+            else:
+                excel_metadata = excel_result.get("metadata", {})
+                excel_confidence = int(excel_result.get("confidence", 0))
+                excel_warnings = excel_result.get("warnings", [])
+                excel_preview = excel_result.get("preview", pd.DataFrame())
+
+                metric_1, metric_2, metric_3 = st.columns(3)
+                metric_1.metric("Extraction confidence", f"{excel_confidence}%")
+                metric_2.metric(
+                    "Fields detected",
+                    sum(bool(value) for value in excel_metadata.values()),
+                )
+                metric_3.metric(
+                    "Workbook sheet",
+                    clean_text(excel_result.get("sheet_name", "Not detected")),
+                )
+
+                if excel_warnings:
+                    for warning in excel_warnings:
+                        st.warning(warning)
+                else:
+                    st.success(
+                        "The main metadata fields were detected. Review every value "
+                        "before saving because extraction is rule-based."
+                    )
+
+                form_column, preview_column = st.columns([1.05, 1], gap="large")
+
+                with preview_column:
+                    st.subheader("Workbook preview")
+                    st.caption(
+                        "Preview of the first populated sheet. Formatting is simplified "
+                        "inside the app; the original workbook will be stored unchanged."
+                    )
+                    if excel_preview.empty:
+                        st.info("No visible cell values were found for the preview.")
+                    else:
+                        preview_for_display = excel_preview.copy()
+                        preview_for_display.columns = [
+                            f"Column {index + 1}"
+                            for index in range(len(preview_for_display.columns))
+                        ]
+                        st.dataframe(
+                            preview_for_display,
+                            use_container_width=True,
+                            hide_index=True,
+                            height=520,
+                        )
+
+                with form_column:
+                    st.subheader("Review extracted metadata")
+
+                    status_options, status_index = select_options_with_current(
+                        STATUS_OPTIONS,
+                        excel_metadata.get("status", ""),
+                    )
+                    discipline_options, discipline_index = select_options_with_current(
+                        DISCIPLINE_OPTIONS,
+                        excel_metadata.get("discipline", ""),
+                    )
+
+                    extracted_notes = [
+                        "Imported from a single controlled Excel document.",
+                    ]
+                    extra_note_fields = [
+                        ("Document type", "document_type"),
+                        ("Prepared by", "prepared_by"),
+                        ("Checked by", "checked_by"),
+                        ("Approved by", "approved_by"),
+                    ]
+                    for note_label, note_key in extra_note_fields:
+                        note_value = clean_text(excel_metadata.get(note_key, ""))
+                        if note_value:
+                            extracted_notes.append(f"{note_label}: {note_value}")
+
+                    default_owner = clean_text(
+                        excel_metadata.get("owner", "")
+                        or excel_metadata.get("prepared_by", "")
+                    )
+                    default_notes = "\n".join(extracted_notes)
+                    default_created_date = optional_date_value(
+                        excel_metadata.get("issue_date", "")
+                    )
+                    default_due_date = optional_date_value(
+                        excel_metadata.get("due_date", "")
+                    )
+
+                    with st.form(
+                        "excel_document_intake_form",
+                        clear_on_submit=False,
+                        border=True,
+                    ):
+                        intake_document_number = st.text_input(
+                            "Document Number *",
+                            value=clean_text(
+                                excel_metadata.get("document_number", "")
+                            ),
+                        )
+                        intake_title = st.text_input(
+                            "Document Title *",
+                            value=clean_text(excel_metadata.get("title", "")),
+                        )
+                        intake_project = st.text_input(
+                            "Project *",
+                            value=clean_text(excel_metadata.get("project", "")),
+                        )
+                        intake_discipline = st.selectbox(
+                            "Discipline *",
+                            discipline_options,
+                            index=discipline_index,
+                        )
+                        intake_revision = st.text_input(
+                            "Revision *",
+                            value=clean_text(excel_metadata.get("revision", "")),
+                        )
+                        intake_status = st.selectbox(
+                            "Status *",
+                            status_options,
+                            index=status_index,
+                        )
+                        intake_owner = st.text_input(
+                            "Owner *",
+                            value=default_owner,
+                            help=(
+                                "The existing database requires an owner. The extracted "
+                                "Prepared By value is suggested, but you can replace it."
+                            ),
+                        )
+                        intake_originator = st.text_input(
+                            "Originator",
+                            value=clean_text(
+                                excel_metadata.get("originator", "")
+                            ),
+                        )
+                        intake_created_date = st.date_input(
+                            "Issue / Created Date",
+                            value=default_created_date,
+                        )
+                        intake_due_date = st.date_input(
+                            "Due Date (optional)",
+                            value=default_due_date,
+                            help=(
+                                "Due Date is optional because this application is not an EDMS."
+                            ),
+                        )
+                        intake_file_name = st.text_input(
+                            "File Name",
+                            value=uploaded_excel_document.name,
+                        )
+                        intake_notes = st.text_area(
+                            "Notes",
+                            value=default_notes,
+                            height=145,
+                        )
+
+                        allow_excel_duplicate = st.checkbox(
+                            "Allow this possible duplicate to be saved for manual review",
+                            value=False,
+                            help=(
+                                "Use this only when a record with the same identity and "
+                                "revision genuinely needs comparison."
+                            ),
+                        )
+                        confirm_excel_review = st.checkbox(
+                            "I reviewed the extracted values and the workbook preview.",
+                            value=False,
+                        )
+
+                        save_excel_document = st.form_submit_button(
+                            "Save Excel document",
+                            type="primary",
+                            use_container_width=True,
+                        )
+
+                    if save_excel_document:
+                        excel_document = {
+                            "document_number": clean_text(
+                                intake_document_number
+                            ),
+                            "title": clean_text(intake_title),
+                            "project": clean_text(intake_project),
+                            "discipline": clean_text(intake_discipline),
+                            "revision": clean_text(intake_revision),
+                            "status": clean_text(intake_status),
+                            "owner": clean_text(intake_owner),
+                            "originator": clean_text(intake_originator),
+                            "created_date": (
+                                str(intake_created_date)
+                                if intake_created_date
+                                else ""
+                            ),
+                            "due_date": (
+                                str(intake_due_date)
+                                if intake_due_date
+                                else ""
+                            ),
+                            "file_name": clean_text(intake_file_name),
+                            "notes": clean_text(intake_notes),
+                        }
+
+                        missing_required = [
+                            field
+                            for field in REQUIRED_FIELDS
+                            if not excel_document[field]
+                        ]
+
+                        if not confirm_excel_review:
+                            st.error(
+                                "Tick the confirmation box after reviewing the "
+                                "extracted values and workbook preview."
+                            )
+                        elif missing_required:
+                            st.error(
+                                "Complete all required fields: "
+                                + ", ".join(
+                                    field.replace("_", " ").title()
+                                    for field in missing_required
+                                )
+                            )
+                        elif (
+                            intake_created_date is not None
+                            and intake_due_date is not None
+                            and intake_created_date > intake_due_date
+                        ):
+                            st.error(
+                                "When a Due Date is provided, the Issue / Created "
+                                "Date cannot be later than it."
+                            )
+                        else:
+                            possible_duplicate = make_document_key(
+                                excel_document["document_number"],
+                                excel_document["title"],
+                                excel_document["revision"],
+                                excel_document["project"],
+                                excel_document["discipline"],
+                            ) in existing_document_keys(documents_df)
+
+                            exact_same_metadata = (
+                                make_record_signature(excel_document)
+                                in existing_record_signatures(documents_df)
+                            )
+
+                            if exact_same_metadata:
+                                st.error(
+                                    "An identical register row is already stored. "
+                                    "No additional copy was created."
+                                )
+                            elif (
+                                possible_duplicate
+                                and not allow_excel_duplicate
+                            ):
+                                st.error(
+                                    "A record with the same project, discipline, "
+                                    "document number, title and revision already exists. "
+                                    "Tick the manual-review option only when the records "
+                                    "genuinely need comparison."
+                                )
+                            else:
+                                def excel_safe_path_part(value):
+                                    cleaned = "".join(
+                                        character
+                                        if character.isalnum()
+                                        or character in "._-"
+                                        else "_"
+                                        for character in str(value or "").strip()
+                                    )
+                                    while "__" in cleaned:
+                                        cleaned = cleaned.replace("__", "_")
+                                    return (
+                                        cleaned.strip("._-")
+                                        or "Unassigned"
+                                    )
+
+                                excel_folder = (
+                                    FILES_ROOT
+                                    / excel_safe_path_part(
+                                        excel_document["project"]
+                                    )
+                                    / excel_safe_path_part(
+                                        excel_document["discipline"]
+                                    )
+                                    / "Excel"
+                                )
+                                excel_folder.mkdir(
+                                    parents=True,
+                                    exist_ok=True,
+                                )
+
+                                stored_excel_name = (
+                                    f"{excel_file_hash[:12]}_"
+                                    f"{excel_safe_path_part(uploaded_excel_document.name)}"
+                                )
+                                excel_target_path = (
+                                    excel_folder / stored_excel_name
+                                )
+
+                                suffix = Path(
+                                    uploaded_excel_document.name
+                                ).suffix.casefold()
+                                excel_mime_type = (
+                                    "application/vnd.ms-excel.sheet.macroEnabled.12"
+                                    if suffix == ".xlsm"
+                                    else "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                                )
+
+                                try:
+                                    excel_target_path.write_bytes(
+                                        excel_file_bytes
+                                    )
+                                    excel_document_id = add_document(
+                                        excel_document
+                                    )
+                                    add_document_file(
+                                        {
+                                            "document_id": excel_document_id,
+                                            "project": excel_document["project"],
+                                            "discipline": excel_document["discipline"],
+                                            "original_file_name": uploaded_excel_document.name,
+                                            "stored_file_name": excel_target_path.name,
+                                            "stored_path": str(excel_target_path),
+                                            "mime_type": excel_mime_type,
+                                            "file_size": len(excel_file_bytes),
+                                            "sha256": excel_file_hash,
+                                        }
+                                    )
+                                except Exception as error:
+                                    if excel_target_path.exists():
+                                        excel_target_path.unlink()
+                                    st.error(
+                                        "The register record or Excel file could not "
+                                        "be saved. No workbook file was kept."
+                                    )
+                                    st.code(str(error))
+                                else:
+                                    st.session_state["flash_message"] = (
+                                        "success",
+                                        "Excel metadata reviewed. The register record "
+                                        "and original workbook were saved successfully.",
+                                    )
+                                    st.rerun()
 
 
 
