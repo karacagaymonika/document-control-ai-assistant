@@ -16,3 +16,11 @@ app_backup.py
 app_before_*.py
 
 venv_broken/
+database_backup.py
+database_before_*.py
+install_*.py
+fix_svg_icon_rendering.py
+fix_remove_due_date_review_cases.py
+sidebar_navigation_before_*.py
+requirements_before_*.txt
+document_control_working_backup.db
