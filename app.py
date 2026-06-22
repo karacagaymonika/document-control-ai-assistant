@@ -1927,6 +1927,7 @@ else:
     health_note = "Priority review needed"
 
 
+# NATIVE MATERIAL ICON SIDEBAR V5
 # -----------------------------
 # Sidebar and page shell
 # -----------------------------
@@ -1972,7 +1973,8 @@ with st.sidebar:
     active_page = st.session_state["active_page"]
 
     st.button(
-        "⌂   Dashboard",
+        "Dashboard",
+        icon=":material/home:",
         key="nav_dashboard",
         type="primary" if active_page == "Dashboard" else "secondary",
         use_container_width=True,
@@ -1986,11 +1988,13 @@ with st.sidebar:
     history_pages = {"Revision history", "Administration"}
 
     with st.expander(
-        "＋  Add document",
+        "Add document",
         expanded=active_page in add_pages,
+        icon=":material/create_new_folder:",
     ):
         st.button(
-            "Add manually",
+            "Manual entry",
+            icon=":material/edit_note:",
             key="nav_add_manually",
             type="primary" if active_page == "Add document" else "secondary",
             use_container_width=True,
@@ -1998,7 +2002,8 @@ with st.sidebar:
             args=("Add document",),
         )
         st.button(
-            "Import CSV register",
+            "Import register",
+            icon=":material/table_view:",
             key="nav_import_csv",
             type="primary" if active_page == "Import CSV" else "secondary",
             use_container_width=True,
@@ -2006,7 +2011,8 @@ with st.sidebar:
             args=("Import CSV",),
         )
         st.button(
-            "Upload PDF and extract information",
+            "Extract from PDF",
+            icon=":material/picture_as_pdf:",
             key="nav_pdf_intake",
             type="primary" if active_page == "PDF intake" else "secondary",
             use_container_width=True,
@@ -2014,7 +2020,8 @@ with st.sidebar:
             args=("PDF intake",),
         )
         st.button(
-            "Upload Excel document and extract information",
+            "Extract from Excel",
+            icon=":material/grid_on:",
             key="nav_excel_intake",
             type="primary" if active_page == "Excel intake" else "secondary",
             use_container_width=True,
@@ -2023,11 +2030,13 @@ with st.sidebar:
         )
 
     with st.expander(
-        "▣  Documents",
+        "Documents",
         expanded=active_page in document_pages,
+        icon=":material/description:",
     ):
         st.button(
-            "Document workspace",
+            "All documents",
+            icon=":material/folder_open:",
             key="nav_documents",
             type="primary" if active_page == "Documents" else "secondary",
             use_container_width=True,
@@ -2035,7 +2044,8 @@ with st.sidebar:
             args=("Documents",),
         )
         st.button(
-            "Register comparison",
+            "Compare registers",
+            icon=":material/balance:",
             key="nav_register_comparison",
             type="primary" if active_page == "Register comparison" else "secondary",
             use_container_width=True,
@@ -2044,11 +2054,13 @@ with st.sidebar:
         )
 
     with st.expander(
-        "✓  Review",
+        "Review",
         expanded=active_page in review_pages,
+        icon=":material/fact_check:",
     ):
         st.button(
-            "Quality review",
+            "Quality checks",
+            icon=":material/verified_user:",
             key="nav_quality_review",
             type="primary" if active_page == "Quality review" else "secondary",
             use_container_width=True,
@@ -2057,6 +2069,7 @@ with st.sidebar:
         )
         st.button(
             "Manual review",
+            icon=":material/person_search:",
             key="nav_manual_review",
             type="primary" if active_page == "Manual review" else "secondary",
             use_container_width=True,
@@ -2065,11 +2078,13 @@ with st.sidebar:
         )
 
     with st.expander(
-        "⚙  History & settings",
+        "History & settings",
         expanded=active_page in history_pages,
+        icon=":material/settings:",
     ):
         st.button(
             "Revision history",
+            icon=":material/history:",
             key="nav_revision_history",
             type="primary" if active_page == "Revision history" else "secondary",
             use_container_width=True,
@@ -2078,6 +2093,7 @@ with st.sidebar:
         )
         st.button(
             "Administration",
+            icon=":material/admin_panel_settings:",
             key="nav_administration",
             type="primary" if active_page == "Administration" else "secondary",
             use_container_width=True,
