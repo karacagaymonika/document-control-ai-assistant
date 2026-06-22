@@ -488,6 +488,16 @@ APP_CSS = """
 st.markdown(APP_CSS, unsafe_allow_html=True)
 
 
+SIDEBAR_V2_CSS = '\n<style>\n    /* PROFESSIONAL SIDEBAR V2 */\n\n    [data-testid="stSidebar"] {\n        width: 318px !important;\n        min-width: 318px !important;\n        max-width: 318px !important;\n        background:\n            radial-gradient(circle at 16% 3%, rgba(47,111,237,0.24), transparent 24%),\n            linear-gradient(180deg, #071a31 0%, #0b2747 52%, #09203a 100%) !important;\n        border-right: 1px solid rgba(255,255,255,0.08) !important;\n        box-shadow: 12px 0 36px rgba(7, 26, 49, 0.12);\n    }\n\n    [data-testid="stSidebar"] > div:first-child {\n        padding-top: 0.4rem;\n    }\n\n    [data-testid="stSidebar"] [data-testid="stSidebarContent"] {\n        padding: 0.2rem 0.72rem 1rem;\n    }\n\n    .dc-sidebar-brand {\n        display: flex;\n        align-items: center;\n        gap: 0.78rem;\n        padding: 0.72rem 0.55rem 0.92rem;\n        margin-bottom: 0.45rem;\n        border-bottom: 1px solid rgba(255,255,255,0.10);\n    }\n\n    .dc-sidebar-logo {\n        display: grid;\n        place-items: center;\n        width: 43px;\n        height: 43px;\n        flex: 0 0 43px;\n        border-radius: 12px;\n        color: #ffffff;\n        font-size: 1.25rem;\n        font-weight: 800;\n        background: linear-gradient(145deg, #2f6fed, #1d4ed8);\n        border: 1px solid rgba(255,255,255,0.28);\n        box-shadow: 0 8px 22px rgba(47,111,237,0.28);\n    }\n\n    .dc-sidebar-brand-title {\n        color: #ffffff !important;\n        font-size: 1.01rem;\n        line-height: 1.12;\n        font-weight: 780;\n        letter-spacing: -0.01em;\n        margin: 0;\n    }\n\n    .dc-sidebar-brand-subtitle {\n        color: #9fb6d3 !important;\n        font-size: 0.71rem;\n        margin-top: 0.22rem;\n        line-height: 1.25;\n    }\n\n    .dc-sidebar-section {\n        color: #7f9bbb !important;\n        font-size: 0.64rem;\n        font-weight: 800;\n        letter-spacing: 0.13em;\n        margin: 0.92rem 0.55rem 0.34rem;\n    }\n\n    [data-testid="stSidebar"] div.stButton {\n        margin-bottom: 0.20rem;\n    }\n\n    [data-testid="stSidebar"] div.stButton > button {\n        width: 100% !important;\n        min-height: 2.52rem !important;\n        height: auto !important;\n        justify-content: flex-start !important;\n        text-align: left !important;\n        white-space: normal !important;\n        line-height: 1.23 !important;\n        padding: 0.59rem 0.70rem !important;\n        border-radius: 9px !important;\n        border: 1px solid transparent !important;\n        background: transparent !important;\n        color: #dce8f7 !important;\n        box-shadow: none !important;\n        transition: background 120ms ease, border-color 120ms ease,\n                    transform 120ms ease !important;\n    }\n\n    [data-testid="stSidebar"] div.stButton > button p,\n    [data-testid="stSidebar"] div.stButton > button span {\n        color: inherit !important;\n        font-size: 0.83rem !important;\n        font-weight: 620 !important;\n        opacity: 1 !important;\n    }\n\n    [data-testid="stSidebar"] div.stButton > button:hover {\n        background: rgba(255,255,255,0.075) !important;\n        border-color: rgba(255,255,255,0.10) !important;\n        color: #ffffff !important;\n        transform: translateX(2px);\n    }\n\n    [data-testid="stSidebar"] div.stButton > button[kind="primary"] {\n        background: linear-gradient(100deg, #1769e0, #2f7cf4) !important;\n        border-color: rgba(255,255,255,0.14) !important;\n        color: #ffffff !important;\n        box-shadow: 0 7px 18px rgba(23,105,224,0.27) !important;\n    }\n\n    .dc-sidebar-status {\n        margin: 1rem 0.15rem 0.4rem;\n        padding: 0.82rem 0.86rem;\n        border-radius: 12px;\n        background: rgba(255,255,255,0.055);\n        border: 1px solid rgba(255,255,255,0.10);\n    }\n\n    .dc-sidebar-status-title {\n        color: #ffffff !important;\n        font-size: 0.77rem;\n        font-weight: 750;\n        margin-bottom: 0.52rem;\n    }\n\n    .dc-sidebar-status-grid {\n        display: grid;\n        grid-template-columns: 1fr 1fr;\n        gap: 0.48rem;\n    }\n\n    .dc-sidebar-status-item {\n        border-radius: 9px;\n        padding: 0.53rem 0.56rem;\n        background: rgba(255,255,255,0.045);\n    }\n\n    .dc-sidebar-status-value {\n        color: #ffffff !important;\n        font-size: 0.95rem;\n        line-height: 1;\n        font-weight: 800;\n    }\n\n    .dc-sidebar-status-label {\n        color: #94abc7 !important;\n        font-size: 0.62rem;\n        line-height: 1.16;\n        margin-top: 0.25rem;\n    }\n\n    .dc-sidebar-demo {\n        display: inline-flex;\n        align-items: center;\n        gap: 0.32rem;\n        margin: 0.72rem 0.1rem 0;\n        padding: 0.25rem 0.48rem;\n        border-radius: 999px;\n        color: #b9cce3 !important;\n        background: rgba(47,111,237,0.12);\n        border: 1px solid rgba(87,146,237,0.20);\n        font-size: 0.61rem;\n        font-weight: 700;\n        letter-spacing: 0.03em;\n    }\n\n    @media (max-width: 900px) {\n        [data-testid="stSidebar"] {\n            width: 300px !important;\n            min-width: 300px !important;\n            max-width: 300px !important;\n        }\n    }\n</style>\n'
+
+st.markdown(SIDEBAR_V2_CSS, unsafe_allow_html=True)
+
+
+COLLAPSIBLE_SIDEBAR_CSS = '\n<style>\n    /* COLLAPSIBLE SIDEBAR GROUPS V3 */\n\n    [data-testid="stSidebar"] details {\n        border: 0 !important;\n        background: transparent !important;\n        margin: 0.22rem 0 0.36rem !important;\n    }\n\n    [data-testid="stSidebar"] details > summary {\n        min-height: 2.62rem !important;\n        display: flex !important;\n        align-items: center !important;\n        padding: 0.60rem 0.72rem !important;\n        border-radius: 9px !important;\n        border: 1px solid rgba(255,255,255,0.08) !important;\n        background: rgba(255,255,255,0.035) !important;\n        color: #dce8f7 !important;\n        font-size: 0.84rem !important;\n        font-weight: 720 !important;\n        transition: background 120ms ease, border-color 120ms ease !important;\n    }\n\n    [data-testid="stSidebar"] details > summary:hover {\n        background: rgba(255,255,255,0.075) !important;\n        border-color: rgba(255,255,255,0.13) !important;\n        color: #ffffff !important;\n    }\n\n    [data-testid="stSidebar"] details[open] > summary {\n        background: linear-gradient(\n            100deg,\n            rgba(23,105,224,0.28),\n            rgba(47,124,244,0.17)\n        ) !important;\n        border-color: rgba(73,139,244,0.42) !important;\n        color: #ffffff !important;\n    }\n\n    [data-testid="stSidebar"] details > summary p,\n    [data-testid="stSidebar"] details > summary span {\n        color: inherit !important;\n        font-size: inherit !important;\n        font-weight: inherit !important;\n    }\n\n    [data-testid="stSidebar"] details > div {\n        padding-top: 0.34rem !important;\n        padding-left: 0.48rem !important;\n        border-left: 1px solid rgba(108,153,210,0.24);\n        margin-left: 0.68rem;\n    }\n\n    [data-testid="stSidebar"] details div.stButton > button {\n        min-height: 2.28rem !important;\n        padding: 0.48rem 0.64rem !important;\n        border-radius: 8px !important;\n        color: #c7d7ea !important;\n    }\n\n    [data-testid="stSidebar"] details div.stButton > button p,\n    [data-testid="stSidebar"] details div.stButton > button span {\n        font-size: 0.78rem !important;\n        font-weight: 610 !important;\n    }\n\n    [data-testid="stSidebar"] details div.stButton > button[kind="primary"] {\n        background: rgba(47,124,244,0.22) !important;\n        border-color: rgba(93,151,246,0.36) !important;\n        box-shadow: none !important;\n        color: #ffffff !important;\n    }\n\n    .dc-sidebar-nav-label {\n        color: #7f9bbb !important;\n        font-size: 0.62rem;\n        font-weight: 800;\n        letter-spacing: 0.13em;\n        margin: 0.94rem 0.55rem 0.34rem;\n    }\n</style>\n'
+
+st.markdown(COLLAPSIBLE_SIDEBAR_CSS, unsafe_allow_html=True)
+
+
 # -----------------------------
 # Data helpers
 # -----------------------------
@@ -1944,13 +1954,25 @@ if st.session_state.get("active_page") not in valid_pages:
 
 
 with st.sidebar:
-    st.markdown("## Document Control")
-    st.caption("Register governance workspace")
+    st.markdown(
+        """
+        <div class="dc-sidebar-brand">
+            <div class="dc-sidebar-logo">DC</div>
+            <div>
+                <div class="dc-sidebar-brand-title">Document Control<br>AI Assistant</div>
+                <div class="dc-sidebar-brand-subtitle">
+                    Controlled information workspace
+                </div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
     active_page = st.session_state["active_page"]
 
     st.button(
-        "Dashboard",
+        "⌂   Dashboard",
         key="nav_dashboard",
         type="primary" if active_page == "Dashboard" else "secondary",
         use_container_width=True,
@@ -1958,105 +1980,140 @@ with st.sidebar:
         args=("Dashboard",),
     )
 
-    st.markdown("#### Add document")
-    st.button(
-        "Add manually",
-        key="nav_add_manually",
-        type="primary" if active_page == "Add document" else "secondary",
-        use_container_width=True,
-        on_click=set_active_page,
-        args=("Add document",),
-    )
-    st.button(
-        "Import CSV register",
-        key="nav_import_csv",
-        type="primary" if active_page == "Import CSV" else "secondary",
-        use_container_width=True,
-        on_click=set_active_page,
-        args=("Import CSV",),
-    )
-    st.button(
-        "Upload PDF and extract information",
-        key="nav_pdf_intake",
-        type="primary" if active_page == "PDF intake" else "secondary",
-        use_container_width=True,
-        on_click=set_active_page,
-        args=("PDF intake",),
-    )
-    st.button(
-        "Upload Excel document and extract information",
-        key="nav_excel_intake",
-        type="primary" if active_page == "Excel intake" else "secondary",
-        use_container_width=True,
-        on_click=set_active_page,
-        args=("Excel intake",),
-    )
+    add_pages = {"Add document", "Import CSV", "PDF intake", "Excel intake"}
+    document_pages = {"Documents", "Register comparison"}
+    review_pages = {"Quality review", "Manual review"}
+    history_pages = {"Revision history", "Administration"}
 
-    st.markdown("#### Manage")
-    st.button(
-        "Documents",
-        key="nav_documents",
-        type="primary" if active_page == "Documents" else "secondary",
-        use_container_width=True,
-        on_click=set_active_page,
-        args=("Documents",),
-    )
-    st.button(
-        "Register comparison",
-        key="nav_register_comparison",
-        type="primary" if active_page == "Register comparison" else "secondary",
-        use_container_width=True,
-        on_click=set_active_page,
-        args=("Register comparison",),
-    )
+    with st.expander(
+        "＋  Add document",
+        expanded=active_page in add_pages,
+    ):
+        st.button(
+            "Add manually",
+            key="nav_add_manually",
+            type="primary" if active_page == "Add document" else "secondary",
+            use_container_width=True,
+            on_click=set_active_page,
+            args=("Add document",),
+        )
+        st.button(
+            "Import CSV register",
+            key="nav_import_csv",
+            type="primary" if active_page == "Import CSV" else "secondary",
+            use_container_width=True,
+            on_click=set_active_page,
+            args=("Import CSV",),
+        )
+        st.button(
+            "Upload PDF and extract information",
+            key="nav_pdf_intake",
+            type="primary" if active_page == "PDF intake" else "secondary",
+            use_container_width=True,
+            on_click=set_active_page,
+            args=("PDF intake",),
+        )
+        st.button(
+            "Upload Excel document and extract information",
+            key="nav_excel_intake",
+            type="primary" if active_page == "Excel intake" else "secondary",
+            use_container_width=True,
+            on_click=set_active_page,
+            args=("Excel intake",),
+        )
 
-    st.markdown("#### Review")
-    st.button(
-        "Issues found",
-        key="nav_quality_review",
-        type="primary" if active_page == "Quality review" else "secondary",
-        use_container_width=True,
-        on_click=set_active_page,
-        args=("Quality review",),
-    )
-    st.button(
-        "Review and decide",
-        key="nav_manual_review",
-        type="primary" if active_page == "Manual review" else "secondary",
-        use_container_width=True,
-        on_click=set_active_page,
-        args=("Manual review",),
-    )
+    with st.expander(
+        "▣  Documents",
+        expanded=active_page in document_pages,
+    ):
+        st.button(
+            "Document workspace",
+            key="nav_documents",
+            type="primary" if active_page == "Documents" else "secondary",
+            use_container_width=True,
+            on_click=set_active_page,
+            args=("Documents",),
+        )
+        st.button(
+            "Register comparison",
+            key="nav_register_comparison",
+            type="primary" if active_page == "Register comparison" else "secondary",
+            use_container_width=True,
+            on_click=set_active_page,
+            args=("Register comparison",),
+        )
 
-    st.markdown("#### History and settings")
-    st.button(
-        "Revision history",
-        key="nav_revision_history",
-        type="primary" if active_page == "Revision history" else "secondary",
-        use_container_width=True,
-        on_click=set_active_page,
-        args=("Revision history",),
-    )
-    st.button(
-        "Administration",
-        key="nav_administration",
-        type="primary" if active_page == "Administration" else "secondary",
-        use_container_width=True,
-        on_click=set_active_page,
-        args=("Administration",),
-    )
+    with st.expander(
+        "✓  Review",
+        expanded=active_page in review_pages,
+    ):
+        st.button(
+            "Quality review",
+            key="nav_quality_review",
+            type="primary" if active_page == "Quality review" else "secondary",
+            use_container_width=True,
+            on_click=set_active_page,
+            args=("Quality review",),
+        )
+        st.button(
+            "Manual review",
+            key="nav_manual_review",
+            type="primary" if active_page == "Manual review" else "secondary",
+            use_container_width=True,
+            on_click=set_active_page,
+            args=("Manual review",),
+        )
+
+    with st.expander(
+        "⚙  History & settings",
+        expanded=active_page in history_pages,
+    ):
+        st.button(
+            "Revision history",
+            key="nav_revision_history",
+            type="primary" if active_page == "Revision history" else "secondary",
+            use_container_width=True,
+            on_click=set_active_page,
+            args=("Revision history",),
+        )
+        st.button(
+            "Administration",
+            key="nav_administration",
+            type="primary" if active_page == "Administration" else "secondary",
+            use_container_width=True,
+            on_click=set_active_page,
+            args=("Administration",),
+        )
 
     page = st.session_state["active_page"]
 
-    st.divider()
-    st.markdown("#### Workspace status")
-    st.write(f"**{len(documents_df)}** stored records")
-    st.write(f"**{len(all_pdf_files_df)}** PDF files")
-    st.write(f"**{len(missing_pdf_df)}** records without PDF")
-    st.write(f"**{len(open_review_cases_df)}** open review cases")
-    st.write(f"**{health_score}/100** health score")
-    st.caption("Local SQLite database and file library - Demo data only")
-
+    st.markdown(
+        f"""
+        <div class="dc-sidebar-status">
+            <div class="dc-sidebar-status-title">Workspace overview</div>
+            <div class="dc-sidebar-status-grid">
+                <div class="dc-sidebar-status-item">
+                    <div class="dc-sidebar-status-value">{len(documents_df)}</div>
+                    <div class="dc-sidebar-status-label">Document records</div>
+                </div>
+                <div class="dc-sidebar-status-item">
+                    <div class="dc-sidebar-status-value">{len(all_pdf_files_df)}</div>
+                    <div class="dc-sidebar-status-label">Controlled files</div>
+                </div>
+                <div class="dc-sidebar-status-item">
+                    <div class="dc-sidebar-status-value">{len(open_review_cases_df)}</div>
+                    <div class="dc-sidebar-status-label">Open reviews</div>
+                </div>
+                <div class="dc-sidebar-status-item">
+                    <div class="dc-sidebar-status-value">{health_score}/100</div>
+                    <div class="dc-sidebar-status-label">Register health</div>
+                </div>
+            </div>
+            <div class="dc-sidebar-demo">● FICTIONAL DEMO DATA ONLY</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
 st.markdown(
     """
