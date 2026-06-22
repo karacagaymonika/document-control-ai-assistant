@@ -308,6 +308,42 @@ def init_db():
                 ),
             )
 
+
+        # Due Date is optional because this application is not an EDMS.
+        # Remove review cases created by the retired due-date rules.
+        obsolete_due_date_cases = connection.execute(
+            """
+            SELECT id
+            FROM review_cases
+            WHERE issue_type IN (
+                'Overdue open record',
+                'Date sequence issue'
+            )
+            """
+        ).fetchall()
+
+        if obsolete_due_date_cases:
+            obsolete_case_ids = [
+                int(case_row["id"])
+                for case_row in obsolete_due_date_cases
+            ]
+            placeholders = ",".join("?" for _ in obsolete_case_ids)
+
+            connection.execute(
+                f"""
+                DELETE FROM review_actions
+                WHERE case_id IN ({placeholders})
+                """,
+                obsolete_case_ids,
+            )
+            connection.execute(
+                f"""
+                DELETE FROM review_cases
+                WHERE id IN ({placeholders})
+                """,
+                obsolete_case_ids,
+            )
+
         connection.commit()
 
 
