@@ -10,7 +10,7 @@ from dateutil import parser as date_parser
 from pypdf import PdfReader
 
 
-FIELD_ALIASES = {
+BASE_FIELD_ALIASES = {
     "document_number": [
         "document number",
         "document no.",
@@ -77,6 +77,7 @@ FIELD_ALIASES = {
         "issue date",
         "document date",
         "date issued",
+        "date received",
     ],
     "due_date": [
         "response due date",
@@ -86,35 +87,150 @@ FIELD_ALIASES = {
 }
 
 
+LANGUAGE_FIELD_ALIASES = {
+    "English": {},
+    "Polish": {
+        "document_number": [
+            "numer dokumentu",
+            "nr dokumentu",
+            "numer rysunku",
+            "nr rysunku",
+        ],
+        "title": [
+            "tytuł dokumentu",
+            "tytul dokumentu",
+            "tytuł rysunku",
+            "tytul rysunku",
+            "nazwa dokumentu",
+            "tytuł",
+            "tytul",
+        ],
+        "revision": ["rewizja", "wersja", "wydanie"],
+        "project": ["nazwa projektu", "projekt", "kontrakt"],
+        "discipline": ["branża", "branza", "dyscyplina", "dział", "dzial"],
+        "status": ["status dokumentu", "cel wydania", "status"],
+        "owner": [
+            "właściciel dokumentu",
+            "wlasciciel dokumentu",
+            "osoba odpowiedzialna",
+            "odpowiedzialny",
+        ],
+        "originator": [
+            "autor",
+            "opracował",
+            "opracowal",
+            "sporządził",
+            "sporzadzil",
+            "firma",
+            "organizacja",
+        ],
+        "created_date": [
+            "data utworzenia",
+            "data wydania",
+            "data dokumentu",
+            "data otrzymania",
+        ],
+        "due_date": ["termin", "data wymagana", "termin odpowiedzi"],
+    },
+    "Arabic": {
+        "document_number": ["رقم الوثيقة", "رقم المستند", "رقم الرسم"],
+        "title": ["عنوان الوثيقة", "عنوان المستند", "عنوان الرسم", "العنوان"],
+        "revision": ["المراجعة", "الإصدار", "النسخة"],
+        "project": ["اسم المشروع", "المشروع", "العقد"],
+        "discipline": ["التخصص", "القسم", "المجال"],
+        "status": ["حالة الوثيقة", "حالة المستند", "غرض الإصدار", "الحالة"],
+        "owner": ["مالك الوثيقة", "مالك المستند", "المسؤول"],
+        "originator": [
+            "المنشئ",
+            "أعد بواسطة",
+            "إعداد",
+            "المؤلف",
+            "الشركة",
+            "المنظمة",
+        ],
+        "created_date": [
+            "تاريخ الإنشاء",
+            "تاريخ الإصدار",
+            "تاريخ الوثيقة",
+            "تاريخ الاستلام",
+        ],
+        "due_date": ["تاريخ الاستحقاق", "موعد الرد", "تاريخ المراجعة"],
+    },
+    "Other": {},
+}
+
+
 DISCIPLINE_KEYWORDS = {
-    "Engineering": ["engineering", "engineer"],
-    "Design": ["design", "designer"],
-    "Quality": ["quality", "qa", "qc"],
-    "HSE": ["hse", "health and safety", "health & safety", "environment"],
-    "Commercial": ["commercial", "cost", "quantity surveying"],
-    "Project Controls": ["project controls", "planning", "planner", "schedule"],
-    "Construction": ["construction", "site"],
-    "Mechanical": ["mechanical", "mech"],
-    "Electrical": ["electrical", "elec"],
-    "Civil": ["civil", "structural", "structure"],
+    "Engineering": ["engineering", "engineer", "inżynieria", "inzynieria", "هندسة"],
+    "Design": ["design", "designer", "projektowanie", "تصميم"],
+    "Quality": ["quality", "qa", "qc", "jakość", "jakosc", "جودة"],
+    "HSE": [
+        "hse",
+        "health and safety",
+        "health & safety",
+        "environment",
+        "bhp",
+        "bezpieczeństwo",
+        "bezpieczenstwo",
+        "سلامة",
+        "بيئة",
+    ],
+    "Commercial": ["commercial", "cost", "quantity surveying", "komercyjny", "تجاري"],
+    "Project Controls": [
+        "project controls",
+        "planning",
+        "planner",
+        "schedule",
+        "harmonogram",
+        "planowanie",
+        "ضبط المشروع",
+        "تخطيط",
+    ],
+    "Construction": ["construction", "site", "budowa", "wykonawstwo", "إنشاءات", "موقع"],
+    "Mechanical": ["mechanical", "mech", "mechaniczna", "mechaniczny", "ميكانيكا"],
+    "Electrical": ["electrical", "elec", "elektryczna", "elektryczny", "كهرباء"],
+    "Civil": [
+        "civil",
+        "structural",
+        "structure",
+        "budowlana",
+        "konstrukcyjna",
+        "مدني",
+        "إنشائي",
+    ],
 }
 
 
 STATUS_KEYWORDS = {
-    "Draft": ["draft", "work in progress", "wip"],
-    "For Review": ["for review", "review", "s3"],
-    "For Information": ["for information", "information", "s2"],
-    "Approved": ["approved", "accepted", "a1"],
+    "Draft": ["draft", "work in progress", "wip", "roboczy", "projekt", "مسودة"],
+    "For Review": ["for review", "review", "s3", "do przeglądu", "do przegladu", "للمراجعة"],
+    "For Information": [
+        "for information",
+        "information",
+        "s2",
+        "do informacji",
+        "للمعلومات",
+    ],
+    "Approved": ["approved", "accepted", "a1", "zatwierdzony", "zaakceptowany", "معتمد"],
     "Approved with Comments": [
         "approved with comments",
         "accepted with comments",
         "a2",
+        "zatwierdzony z uwagami",
+        "معتمد مع ملاحظات",
     ],
-    "Rejected": ["rejected", "not accepted", "a3"],
-    "Superseded": ["superseded", "obsolete"],
-    "Missing Information": ["missing information", "incomplete"],
-    "Closed": ["closed"],
+    "For Construction": ["for construction", "afc", "do budowy", "للتنفيذ"],
+    "As Built": ["as built", "powykonawczy", "powykonawcza", "كما تم التنفيذ"],
+    "Rejected": ["rejected", "not accepted", "a3", "odrzucony", "مرفوض"],
+    "Superseded": ["superseded", "obsolete", "zastąpiony", "zastapiony", "ملغى"],
+    "Missing Information": ["missing information", "incomplete", "brak danych", "معلومات ناقصة"],
+    "Closed": ["closed", "zamknięty", "zamkniety", "مغلق"],
 }
+
+
+CONFIDENCE_HIGH = "high"
+CONFIDENCE_CHECK = "check"
+CONFIDENCE_NOT_FOUND = "not_found"
 
 
 def _clean_value(value: Any) -> str:
@@ -126,9 +242,18 @@ def _clean_value(value: Any) -> str:
 
 
 def _normalise_label(value: str) -> str:
-    value = value.casefold()
-    value = re.sub(r"[^a-z0-9]+", " ", value)
+    value = str(value).casefold()
+    value = re.sub(r"[\W_]+", " ", value, flags=re.UNICODE)
     return re.sub(r"\s+", " ", value).strip()
+
+
+def _field_aliases(language: str) -> dict[str, list[str]]:
+    selected = language if language in LANGUAGE_FIELD_ALIASES else "Other"
+    combined: dict[str, list[str]] = {}
+    for field, aliases in BASE_FIELD_ALIASES.items():
+        combined[field] = list(aliases)
+        combined[field].extend(LANGUAGE_FIELD_ALIASES[selected].get(field, []))
+    return combined
 
 
 def _useful_lines(text: str) -> list[str]:
@@ -143,8 +268,14 @@ def _useful_lines(text: str) -> list[str]:
 def _extract_labelled_value(
     lines: list[str],
     aliases: list[str],
+    all_aliases: dict[str, list[str]],
 ) -> tuple[str, str]:
-    sorted_aliases = sorted(aliases, key=len, reverse=True)
+    sorted_aliases = sorted(set(aliases), key=len, reverse=True)
+    all_normalised_aliases = {
+        _normalise_label(alias)
+        for field_aliases in all_aliases.values()
+        for alias in field_aliases
+    }
 
     for index, line in enumerate(lines):
         normalised_line = _normalise_label(line)
@@ -153,11 +284,11 @@ def _extract_labelled_value(
             normalised_alias = _normalise_label(alias)
 
             same_line_patterns = [
-                rf"^\s*{re.escape(alias)}\s*[:\-]\s*(.+)$",
+                rf"^\s*{re.escape(alias)}\s*[:\-–—]\s*(.+)$",
                 rf"^\s*{re.escape(alias)}\s+(.+)$",
             ]
             for pattern in same_line_patterns:
-                match = re.match(pattern, line, flags=re.IGNORECASE)
+                match = re.match(pattern, line, flags=re.IGNORECASE | re.UNICODE)
                 if match:
                     value = _clean_value(match.group(1))
                     if value and _normalise_label(value) != normalised_alias:
@@ -166,11 +297,7 @@ def _extract_labelled_value(
             if normalised_line == normalised_alias:
                 for next_index in range(index + 1, min(index + 3, len(lines))):
                     candidate = _clean_value(lines[next_index])
-                    if candidate and not any(
-                        _normalise_label(candidate) == _normalise_label(other)
-                        for field_aliases in FIELD_ALIASES.values()
-                        for other in field_aliases
-                    ):
+                    if candidate and _normalise_label(candidate) not in all_normalised_aliases:
                         return candidate, f"PDF label: {alias}"
 
     return "", ""
@@ -188,7 +315,12 @@ def _safe_pdf_metadata_title(reader: PdfReader) -> str:
 
 def _normalise_revision(value: str) -> str:
     value = _clean_value(value).upper()
-    value = re.sub(r"^(REVISION|REV\.?|REV)\s*", "", value, flags=re.IGNORECASE)
+    value = re.sub(
+        r"^(REVISION|REV\.?|REV|REWIZJA|WERSJA|المراجعة|الإصدار)\s*",
+        "",
+        value,
+        flags=re.IGNORECASE | re.UNICODE,
+    )
     match = re.search(r"\b(?:P|C|S)?\d{1,3}\b|\b[A-Z]\d{1,2}\b|\b[A-Z]\b", value)
     return match.group(0).upper() if match else value[:30]
 
@@ -229,10 +361,7 @@ def _map_controlled_value(
     for controlled_value, keywords in keyword_map.items():
         for keyword in keywords:
             keyword_normalised = _normalise_label(keyword)
-            if (
-                normalised == keyword_normalised
-                or keyword_normalised in normalised
-            ):
+            if normalised == keyword_normalised or keyword_normalised in normalised:
                 return controlled_value
 
     return _clean_value(raw_value)
@@ -258,21 +387,73 @@ def _looks_like_title(value: str) -> bool:
     value = _clean_value(value)
     if not value or len(value) < 4 or len(value) > 180:
         return False
-    if re.fullmatch(r"[\W\d_]+", value):
+    if re.fullmatch(r"[\W\d_]+", value, flags=re.UNICODE):
         return False
     return True
+
+
+def _confidence_for_field(field: str, value: str, source: str) -> str:
+    if not _clean_value(value):
+        return CONFIDENCE_NOT_FOUND
+
+    if source.startswith("PDF label:"):
+        if field == "document_number" and not re.search(r"\d", value):
+            return CONFIDENCE_CHECK
+        if field == "revision" and len(value) > 12:
+            return CONFIDENCE_CHECK
+        return CONFIDENCE_HIGH
+
+    if source in {"Uploaded filename", "PDF document properties"}:
+        return CONFIDENCE_CHECK
+
+    if source.startswith("Keyword found"):
+        return CONFIDENCE_CHECK
+
+    if field in {"file_name", "notes"}:
+        return CONFIDENCE_HIGH
+
+    return CONFIDENCE_CHECK
+
+
+def _language_note(language: str, has_text: bool) -> str:
+    if not has_text:
+        return (
+            "No selectable text was found. Scanned or image-only PDFs are not OCR-processed "
+            "in this version, so the metadata must be entered manually."
+        )
+    if language == "Arabic":
+        return (
+            "Arabic labels are recognised in text-based PDFs. Results depend on how the "
+            "Arabic text was embedded in the source PDF, so extracted values should be checked."
+        )
+    if language == "Polish":
+        return (
+            "Polish and English document labels are recognised in text-based PDFs. "
+            "Scanned PDFs still require manual entry in this version."
+        )
+    if language == "Other":
+        return (
+            "The selected language does not have a dedicated label dictionary yet. "
+            "English labels, filename clues and manual review will be used."
+        )
+    return (
+        "English labels are recognised in text-based PDFs. Scanned PDFs still require "
+        "manual entry in this version."
+    )
 
 
 def extract_pdf_metadata(
     file_bytes: bytes,
     file_name: str,
     max_pages: int = 5,
+    language: str = "English",
 ) -> dict[str, Any]:
     """
     Extract suggested document-control metadata from a text-based PDF.
 
-    The returned values are suggestions only and must be reviewed by a person
-    before they are saved to the controlled register.
+    The returned values are suggestions only. Confidence is expressed using
+    user-friendly levels: high, check, or not_found. A person must review and
+    approve the values before the record is saved.
     """
     if not file_bytes.startswith(b"%PDF-"):
         raise ValueError("The selected file does not contain a valid PDF signature.")
@@ -300,6 +481,8 @@ def extract_pdf_metadata(
 
     text = "\n".join(page_text)
     lines = _useful_lines(text)
+    aliases = _field_aliases(language)
+
     metadata: dict[str, str] = {
         "document_number": "",
         "title": "",
@@ -314,13 +497,11 @@ def extract_pdf_metadata(
         "file_name": file_name,
         "notes": "",
     }
-    sources: dict[str, str] = {
-        field: "" for field in metadata
-    }
+    sources: dict[str, str] = {field: "" for field in metadata}
     sources["file_name"] = "Uploaded filename"
 
-    for field, aliases in FIELD_ALIASES.items():
-        value, source = _extract_labelled_value(lines, aliases)
+    for field, field_aliases in aliases.items():
+        value, source = _extract_labelled_value(lines, field_aliases, aliases)
         metadata[field] = value
         sources[field] = source
 
@@ -328,9 +509,7 @@ def extract_pdf_metadata(
     metadata["discipline"] = _map_controlled_value(
         metadata["discipline"], DISCIPLINE_KEYWORDS
     )
-    metadata["status"] = _map_controlled_value(
-        metadata["status"], STATUS_KEYWORDS
-    )
+    metadata["status"] = _map_controlled_value(metadata["status"], STATUS_KEYWORDS)
     metadata["created_date"] = _parse_date(metadata["created_date"])
     metadata["due_date"] = _parse_date(metadata["due_date"])
 
@@ -346,16 +525,17 @@ def extract_pdf_metadata(
         sources["title"] = "PDF document properties"
 
     if not metadata["discipline"]:
-        metadata["discipline"] = _map_controlled_value(text, DISCIPLINE_KEYWORDS)
-        if metadata["discipline"]:
+        mapped_discipline = _map_controlled_value(text, DISCIPLINE_KEYWORDS)
+        if mapped_discipline and mapped_discipline != _clean_value(text):
+            metadata["discipline"] = mapped_discipline
             sources["discipline"] = "Keyword found in PDF text"
 
     warnings: list[str] = []
+    has_text = bool(text.strip())
 
-    if not text.strip():
+    if not has_text:
         warnings.append(
-            "No selectable text was found. This may be a scanned/image PDF, "
-            "so the metadata must be entered manually."
+            "No selectable text was found. This may be a scanned or image-only PDF."
         )
 
     missing_key_fields = [
@@ -365,22 +545,48 @@ def extract_pdf_metadata(
     ]
     if missing_key_fields:
         warnings.append(
-            "The following fields were not confidently detected: "
+            "Please enter or confirm: "
             + ", ".join(field.replace("_", " ").title() for field in missing_key_fields)
             + "."
         )
 
     metadata["notes"] = (
-        "Metadata was suggested from the uploaded PDF and reviewed by a person "
+        f"Metadata was suggested from a {language} PDF and reviewed by a person "
         "before saving."
     )
     sources["notes"] = "System note"
 
+    confidence = {
+        field: _confidence_for_field(field, metadata.get(field, ""), sources.get(field, ""))
+        for field in metadata
+    }
+
+    attention_fields = [
+        field
+        for field in [
+            "document_number",
+            "title",
+            "project",
+            "discipline",
+            "revision",
+            "status",
+            "owner",
+            "originator",
+            "created_date",
+        ]
+        if confidence.get(field) != CONFIDENCE_HIGH
+    ]
+
     return {
         "metadata": metadata,
         "sources": sources,
+        "confidence": confidence,
+        "attention_fields": attention_fields,
         "pages_read": pages_to_read,
         "total_pages": len(reader.pages),
         "text_preview": text[:6000],
         "warnings": warnings,
+        "language": language,
+        "language_note": _language_note(language, has_text),
+        "text_based_pdf": has_text,
     }

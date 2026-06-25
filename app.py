@@ -1,4 +1,6 @@
+import base64
 import hashlib
+import html
 import io
 import json
 import re
@@ -9,7 +11,6 @@ import pandas as pd
 import streamlit as st
 
 from pdf_extractor import extract_pdf_metadata
-from excel_extractor import extract_excel_metadata
 
 from database import (
     FILES_ROOT,
@@ -100,10 +101,19 @@ STATUS_OPTIONS = [
     "For Information",
     "Approved",
     "Approved with Comments",
+    "For Construction",
+    "As Built",
     "Rejected",
     "Superseded",
     "Missing Information",
     "Closed",
+]
+
+WORKFLOW_STATUS_OPTIONS = [
+    "Ready",
+    "Needs checking",
+    "Possible duplicate",
+    "Archived",
 ]
 
 DISCIPLINE_OPTIONS = [
@@ -153,6 +163,57 @@ DISPLAY_COLUMNS = [
     "pdf_count",
     "notes",
 ]
+
+
+PDF_LANGUAGE_OPTIONS = ["English", "Polish", "Arabic", "Other"]
+
+CONFIDENCE_PRESENTATION = {
+    "high": {
+        "label": "High confidence",
+        "css_class": "confidence-high",
+    },
+    "check": {
+        "label": "Please check",
+        "css_class": "confidence-check",
+    },
+    "not_found": {
+        "label": "Not found",
+        "css_class": "confidence-missing",
+    },
+}
+
+REGISTER_FIELD_LABELS = {
+    "document_number": "Document Number",
+    "title": "Document Title",
+    "project": "Project",
+    "discipline": "Discipline",
+    "revision": "Revision",
+    "status": "Official Status",
+    "owner": "Owner",
+    "originator": "Originator",
+    "created_date": "Date Received",
+    "due_date": "Due Date (optional)",
+    "file_name": "File Name",
+    "notes": "Notes",
+}
+
+REGISTER_COLUMN_ALIASES = {
+    "document_number": [
+        "document number", "document no", "doc number", "doc no",
+        "drawing number", "drawing no", "sheet number", "number",
+    ],
+    "title": ["document title", "drawing title", "sheet title", "title", "description"],
+    "project": ["project", "project name", "job", "job name", "contract"],
+    "discipline": ["discipline", "department", "trade", "category"],
+    "revision": ["revision", "rev", "version", "issue"],
+    "status": ["status", "document status", "suitability", "purpose of issue"],
+    "owner": ["owner", "document owner", "responsible person", "responsible"],
+    "originator": ["originator", "author", "prepared by", "company", "organisation", "organization"],
+    "created_date": ["created date", "date received", "received date", "issue date", "document date"],
+    "due_date": ["due date", "review due date", "response due date"],
+    "file_name": ["file name", "filename", "document file", "pdf name"],
+    "notes": ["notes", "comments", "remarks", "comment"],
+}
 
 
 APP_CSS = """
@@ -482,20 +543,69 @@ APP_CSS = """
             font-size: 1.55rem;
         }
     }
+
+    .confidence-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.5rem;
+        margin: 0.15rem 0 0.28rem;
+    }
+
+    .confidence-field-name {
+        color: var(--text);
+        font-size: 0.78rem;
+        font-weight: 750;
+    }
+
+    .confidence-badge {
+        border-radius: 999px;
+        padding: 0.18rem 0.5rem;
+        font-size: 0.7rem;
+        font-weight: 750;
+        border: 1px solid transparent;
+        white-space: nowrap;
+    }
+
+    .confidence-high {
+        color: #176746;
+        background: #eaf7f0;
+        border-color: #bfe3d1;
+    }
+
+    .confidence-check {
+        color: #855400;
+        background: #fff5df;
+        border-color: #f0d28f;
+    }
+
+    .confidence-missing {
+        color: #9c2f2f;
+        background: #fff0f0;
+        border-color: #efc2c2;
+    }
+
+    .pdf-preview-shell {
+        background: #ffffff;
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        padding: 0.55rem;
+        box-shadow: 0 6px 20px rgba(31, 51, 81, 0.05);
+    }
+
+    .intake-step {
+        color: var(--muted);
+        font-size: 0.78rem;
+        font-weight: 700;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        margin-bottom: 0.3rem;
+    }
+
 </style>
 """
 
 st.markdown(APP_CSS, unsafe_allow_html=True)
-
-
-SIDEBAR_V2_CSS = '\n<style>\n    /* PROFESSIONAL SIDEBAR V2 */\n\n    [data-testid="stSidebar"] {\n        width: 318px !important;\n        min-width: 318px !important;\n        max-width: 318px !important;\n        background:\n            radial-gradient(circle at 16% 3%, rgba(47,111,237,0.24), transparent 24%),\n            linear-gradient(180deg, #071a31 0%, #0b2747 52%, #09203a 100%) !important;\n        border-right: 1px solid rgba(255,255,255,0.08) !important;\n        box-shadow: 12px 0 36px rgba(7, 26, 49, 0.12);\n    }\n\n    [data-testid="stSidebar"] > div:first-child {\n        padding-top: 0.4rem;\n    }\n\n    [data-testid="stSidebar"] [data-testid="stSidebarContent"] {\n        padding: 0.2rem 0.72rem 1rem;\n    }\n\n    .dc-sidebar-brand {\n        display: flex;\n        align-items: center;\n        gap: 0.78rem;\n        padding: 0.72rem 0.55rem 0.92rem;\n        margin-bottom: 0.45rem;\n        border-bottom: 1px solid rgba(255,255,255,0.10);\n    }\n\n    .dc-sidebar-logo {\n        display: grid;\n        place-items: center;\n        width: 43px;\n        height: 43px;\n        flex: 0 0 43px;\n        border-radius: 12px;\n        color: #ffffff;\n        font-size: 1.25rem;\n        font-weight: 800;\n        background: linear-gradient(145deg, #2f6fed, #1d4ed8);\n        border: 1px solid rgba(255,255,255,0.28);\n        box-shadow: 0 8px 22px rgba(47,111,237,0.28);\n    }\n\n    .dc-sidebar-brand-title {\n        color: #ffffff !important;\n        font-size: 1.01rem;\n        line-height: 1.12;\n        font-weight: 780;\n        letter-spacing: -0.01em;\n        margin: 0;\n    }\n\n    .dc-sidebar-brand-subtitle {\n        color: #9fb6d3 !important;\n        font-size: 0.71rem;\n        margin-top: 0.22rem;\n        line-height: 1.25;\n    }\n\n    .dc-sidebar-section {\n        color: #7f9bbb !important;\n        font-size: 0.64rem;\n        font-weight: 800;\n        letter-spacing: 0.13em;\n        margin: 0.92rem 0.55rem 0.34rem;\n    }\n\n    [data-testid="stSidebar"] div.stButton {\n        margin-bottom: 0.20rem;\n    }\n\n    [data-testid="stSidebar"] div.stButton > button {\n        width: 100% !important;\n        min-height: 2.52rem !important;\n        height: auto !important;\n        justify-content: flex-start !important;\n        text-align: left !important;\n        white-space: normal !important;\n        line-height: 1.23 !important;\n        padding: 0.59rem 0.70rem !important;\n        border-radius: 9px !important;\n        border: 1px solid transparent !important;\n        background: transparent !important;\n        color: #dce8f7 !important;\n        box-shadow: none !important;\n        transition: background 120ms ease, border-color 120ms ease,\n                    transform 120ms ease !important;\n    }\n\n    [data-testid="stSidebar"] div.stButton > button p,\n    [data-testid="stSidebar"] div.stButton > button span {\n        color: inherit !important;\n        font-size: 0.83rem !important;\n        font-weight: 620 !important;\n        opacity: 1 !important;\n    }\n\n    [data-testid="stSidebar"] div.stButton > button:hover {\n        background: rgba(255,255,255,0.075) !important;\n        border-color: rgba(255,255,255,0.10) !important;\n        color: #ffffff !important;\n        transform: translateX(2px);\n    }\n\n    [data-testid="stSidebar"] div.stButton > button[kind="primary"] {\n        background: linear-gradient(100deg, #1769e0, #2f7cf4) !important;\n        border-color: rgba(255,255,255,0.14) !important;\n        color: #ffffff !important;\n        box-shadow: 0 7px 18px rgba(23,105,224,0.27) !important;\n    }\n\n    .dc-sidebar-status {\n        margin: 1rem 0.15rem 0.4rem;\n        padding: 0.82rem 0.86rem;\n        border-radius: 12px;\n        background: rgba(255,255,255,0.055);\n        border: 1px solid rgba(255,255,255,0.10);\n    }\n\n    .dc-sidebar-status-title {\n        color: #ffffff !important;\n        font-size: 0.77rem;\n        font-weight: 750;\n        margin-bottom: 0.52rem;\n    }\n\n    .dc-sidebar-status-grid {\n        display: grid;\n        grid-template-columns: 1fr 1fr;\n        gap: 0.48rem;\n    }\n\n    .dc-sidebar-status-item {\n        border-radius: 9px;\n        padding: 0.53rem 0.56rem;\n        background: rgba(255,255,255,0.045);\n    }\n\n    .dc-sidebar-status-value {\n        color: #ffffff !important;\n        font-size: 0.95rem;\n        line-height: 1;\n        font-weight: 800;\n    }\n\n    .dc-sidebar-status-label {\n        color: #94abc7 !important;\n        font-size: 0.62rem;\n        line-height: 1.16;\n        margin-top: 0.25rem;\n    }\n\n    .dc-sidebar-demo {\n        display: inline-flex;\n        align-items: center;\n        gap: 0.32rem;\n        margin: 0.72rem 0.1rem 0;\n        padding: 0.25rem 0.48rem;\n        border-radius: 999px;\n        color: #b9cce3 !important;\n        background: rgba(47,111,237,0.12);\n        border: 1px solid rgba(87,146,237,0.20);\n        font-size: 0.61rem;\n        font-weight: 700;\n        letter-spacing: 0.03em;\n    }\n\n    @media (max-width: 900px) {\n        [data-testid="stSidebar"] {\n            width: 300px !important;\n            min-width: 300px !important;\n            max-width: 300px !important;\n        }\n    }\n</style>\n'
-
-st.markdown(SIDEBAR_V2_CSS, unsafe_allow_html=True)
-
-
-COLLAPSIBLE_SIDEBAR_CSS = '\n<style>\n    /* COLLAPSIBLE SIDEBAR GROUPS V3 */\n\n    [data-testid="stSidebar"] details {\n        border: 0 !important;\n        background: transparent !important;\n        margin: 0.22rem 0 0.36rem !important;\n    }\n\n    [data-testid="stSidebar"] details > summary {\n        min-height: 2.62rem !important;\n        display: flex !important;\n        align-items: center !important;\n        padding: 0.60rem 0.72rem !important;\n        border-radius: 9px !important;\n        border: 1px solid rgba(255,255,255,0.08) !important;\n        background: rgba(255,255,255,0.035) !important;\n        color: #dce8f7 !important;\n        font-size: 0.84rem !important;\n        font-weight: 720 !important;\n        transition: background 120ms ease, border-color 120ms ease !important;\n    }\n\n    [data-testid="stSidebar"] details > summary:hover {\n        background: rgba(255,255,255,0.075) !important;\n        border-color: rgba(255,255,255,0.13) !important;\n        color: #ffffff !important;\n    }\n\n    [data-testid="stSidebar"] details[open] > summary {\n        background: linear-gradient(\n            100deg,\n            rgba(23,105,224,0.28),\n            rgba(47,124,244,0.17)\n        ) !important;\n        border-color: rgba(73,139,244,0.42) !important;\n        color: #ffffff !important;\n    }\n\n    [data-testid="stSidebar"] details > summary p,\n    [data-testid="stSidebar"] details > summary span {\n        color: inherit !important;\n        font-size: inherit !important;\n        font-weight: inherit !important;\n    }\n\n    [data-testid="stSidebar"] details > div {\n        padding-top: 0.34rem !important;\n        padding-left: 0.48rem !important;\n        border-left: 1px solid rgba(108,153,210,0.24);\n        margin-left: 0.68rem;\n    }\n\n    [data-testid="stSidebar"] details div.stButton > button {\n        min-height: 2.28rem !important;\n        padding: 0.48rem 0.64rem !important;\n        border-radius: 8px !important;\n        color: #c7d7ea !important;\n    }\n\n    [data-testid="stSidebar"] details div.stButton > button p,\n    [data-testid="stSidebar"] details div.stButton > button span {\n        font-size: 0.78rem !important;\n        font-weight: 610 !important;\n    }\n\n    [data-testid="stSidebar"] details div.stButton > button[kind="primary"] {\n        background: rgba(47,124,244,0.22) !important;\n        border-color: rgba(93,151,246,0.36) !important;\n        box-shadow: none !important;\n        color: #ffffff !important;\n    }\n\n    .dc-sidebar-nav-label {\n        color: #7f9bbb !important;\n        font-size: 0.62rem;\n        font-weight: 800;\n        letter-spacing: 0.13em;\n        margin: 0.94rem 0.55rem 0.34rem;\n    }\n</style>\n'
-
-st.markdown(COLLAPSIBLE_SIDEBAR_CSS, unsafe_allow_html=True)
 
 
 # -----------------------------
@@ -1134,6 +1244,149 @@ def build_duplicate_cleanup_plan(df, strategy):
             )
 
     return pd.DataFrame(plan, columns=columns)
+
+
+
+def confidence_badge_html(level, source=""):
+    details = CONFIDENCE_PRESENTATION.get(
+        clean_text(level),
+        CONFIDENCE_PRESENTATION["check"],
+    )
+    safe_source = html.escape(clean_text(source) or "No source detected", quote=True)
+    return (
+        f'<span class="confidence-badge {details["css_class"]}" '
+        f'title="{safe_source}">{details["label"]}</span>'
+    )
+
+
+def render_confidence_label(field_name, level, source=""):
+    st.markdown(
+        f"""
+        <div class="confidence-row">
+            <span class="confidence-field-name">{html.escape(field_name)}</span>
+            {confidence_badge_html(level, source)}
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_pdf_preview(file_bytes, file_name, height=760):
+    encoded_pdf = base64.b64encode(file_bytes).decode("ascii")
+    safe_name = html.escape(clean_text(file_name) or "PDF preview")
+    st.markdown(
+        f"""
+        <div class="pdf-preview-shell">
+            <iframe
+                title="{safe_name}"
+                src="data:application/pdf;base64,{encoded_pdf}#toolbar=1&navpanes=0&scrollbar=1"
+                width="100%"
+                height="{int(height)}"
+                style="border: 0; border-radius: 10px; background: white;"
+            ></iframe>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def normalise_register_source_dataframe(source_df):
+    working = source_df.copy()
+    working.columns = [str(column).strip() for column in working.columns]
+    working = working.fillna("")
+    for column in working.columns:
+        working[column] = working[column].astype(str).str.strip()
+    return working
+
+
+def read_uploaded_excel_sheet(uploaded_file, sheet_name):
+    file_bytes = uploaded_file.getvalue()
+    return pd.read_excel(
+        io.BytesIO(file_bytes),
+        sheet_name=sheet_name,
+        dtype=str,
+        keep_default_na=False,
+    )
+
+
+def get_excel_sheet_names(uploaded_file):
+    with pd.ExcelFile(io.BytesIO(uploaded_file.getvalue())) as workbook:
+        return workbook.sheet_names
+
+
+def suggest_register_column_mapping(source_columns):
+    source_columns = list(source_columns)
+    normalised_sources = {
+        source: normalize_column_name(source)
+        for source in source_columns
+    }
+    mapping = {}
+
+    for target_field, aliases in REGISTER_COLUMN_ALIASES.items():
+        target_aliases = {
+            normalize_column_name(target_field),
+            *{normalize_column_name(alias) for alias in aliases},
+        }
+        exact_match = next(
+            (
+                source
+                for source, normalised_source in normalised_sources.items()
+                if normalised_source in target_aliases
+            ),
+            None,
+        )
+        if exact_match:
+            mapping[target_field] = exact_match
+            continue
+
+        partial_match = next(
+            (
+                source
+                for source, normalised_source in normalised_sources.items()
+                if any(
+                    alias and (
+                        alias in normalised_source
+                        or normalised_source in alias
+                    )
+                    for alias in target_aliases
+                )
+            ),
+            None,
+        )
+        mapping[target_field] = partial_match or ""
+
+    return mapping
+
+
+def build_mapped_register(source_df, mapping):
+    prepared = pd.DataFrame(index=source_df.index)
+
+    for target_field in CSV_COLUMNS:
+        source_column = clean_text(mapping.get(target_field, ""))
+        if source_column and source_column in source_df.columns:
+            prepared[target_field] = source_df[source_column]
+        else:
+            prepared[target_field] = ""
+
+    for column in CSV_COLUMNS:
+        prepared[column] = (
+            prepared[column]
+            .fillna("")
+            .astype(str)
+            .str.strip()
+        )
+
+    return prepared.reset_index(drop=True)
+
+
+def relationship_display_name(relationship_type):
+    labels = {
+        "new_document": "New document",
+        "new_revision": "New revision",
+        "exact_duplicate": "Possible duplicate",
+        "similar_document_number": "Similar document number",
+    }
+    return labels.get(clean_text(relationship_type), "Needs checking")
 
 
 # -----------------------------
@@ -1896,6 +2149,162 @@ def show_flash_message():
         st.info(message)
 
 
+
+# -----------------------------
+# Phase 1 workflow helpers
+# -----------------------------
+
+def latest_revision_ids(df):
+    """Return the internal IDs of the latest revision in each document family."""
+    if df.empty:
+        return set()
+
+    latest_ids = set()
+    working = df.copy()
+    working["_family_key"] = working.apply(revision_family_key, axis=1)
+
+    for _, family in working.groupby("_family_key", dropna=False):
+        ordered = sort_revision_history(family)
+        if not ordered.empty:
+            latest_ids.add(int(ordered.iloc[0]["id"]))
+
+    return latest_ids
+
+
+def review_cases_for_document(document_id, cases_df):
+    """Return open review cases linked to one document record."""
+    if cases_df.empty:
+        return cases_df.copy()
+
+    matches = []
+    for index, case_row in cases_df.iterrows():
+        related_ids = decode_related_ids(case_row.get("related_document_ids", ""))
+        record_id = case_row.get("record_id")
+        try:
+            if pd.notna(record_id):
+                related_ids.append(int(record_id))
+        except (TypeError, ValueError):
+            pass
+
+        if int(document_id) in set(related_ids):
+            matches.append(index)
+
+    return cases_df.loc[matches].copy() if matches else cases_df.iloc[0:0].copy()
+
+
+def workflow_status_for_document(document_row, cases_df):
+    """Keep official document status separate from app workflow status."""
+    if int(document_row.get("is_archived", 0) or 0):
+        return "Archived"
+
+    linked_cases = review_cases_for_document(int(document_row["id"]), cases_df)
+    if linked_cases.empty:
+        return "Ready"
+
+    issue_types = {
+        normalized_key(value)
+        for value in linked_cases.get("issue_type", pd.Series(dtype=str)).tolist()
+    }
+    if "exact duplicate" in issue_types:
+        return "Possible duplicate"
+
+    return "Needs checking"
+
+
+def attention_action(issue_type):
+    """Translate internal issue types into a clear user action."""
+    issue_key = normalized_key(issue_type)
+    action_map = {
+        "missing metadata": "Correct the missing information",
+        "exact duplicate": "Compare records",
+        "title conflict": "Check and correct the title",
+        "filename mismatch": "Check the PDF and filename",
+        "missing controlled pdf": "Attach the controlled PDF",
+        "invalid status": "Choose a valid document status",
+        "pdf extraction uncertain": "Check the extracted value",
+        "similar document number": "Compare document numbers",
+    }
+    return action_map.get(issue_key, "Review the document")
+
+
+def attention_problem_label(issue_type):
+    issue_key = normalized_key(issue_type)
+    label_map = {
+        "missing metadata": "Missing mandatory information",
+        "exact duplicate": "Possible duplicate",
+        "title conflict": "Conflicting document title",
+        "filename mismatch": "PDF filename needs checking",
+        "missing controlled pdf": "Controlled PDF is missing",
+        "invalid status": "Document status needs checking",
+        "pdf extraction uncertain": "PDF extraction needs checking",
+        "similar document number": "Similar document number",
+    }
+    return label_map.get(issue_key, clean_text(issue_type) or "Document needs checking")
+
+
+def attention_table(cases_df):
+    if cases_df.empty:
+        return pd.DataFrame()
+
+    rows = []
+    for _, case_row in cases_df.iterrows():
+        document_number = clean_text(case_row.get("document_number", "")) or "Document number not set"
+        revision = clean_text(case_row.get("revision", ""))
+        document_label = document_number + (f" Rev {revision}" if revision else "")
+
+        rows.append(
+            {
+                "Priority": clean_text(case_row.get("severity", "Review")),
+                "Problem": attention_problem_label(case_row.get("issue_type", "")),
+                "Document": document_label,
+                "Title": clean_text(case_row.get("title", "")),
+                "Project": clean_text(case_row.get("project", "")),
+                "Explanation": clean_text(case_row.get("issue_summary", "")),
+                "Next action": attention_action(case_row.get("issue_type", "")),
+                "Review status": clean_text(case_row.get("status", "Pending Review")),
+            }
+        )
+
+    return pd.DataFrame(rows)
+
+
+
+def classify_incoming_document(record, df):
+    """Classify an incoming record without treating a new revision as a duplicate."""
+    if df.empty:
+        return {"type": "new_document", "matches": pd.DataFrame()}
+
+    project_key = normalized_key(record.get("project", ""))
+    discipline_key = normalized_key(record.get("discipline", ""))
+    number_key = normalized_key(record.get("document_number", ""))
+    title_key = normalized_key(record.get("title", ""))
+    revision_key = normalized_key(record.get("revision", ""))
+
+    working = df.copy()
+    for column in ["project", "discipline", "document_number", "title", "revision"]:
+        working[f"_{column}_key"] = working[column].map(normalized_key)
+
+    same_number = working[
+        (working["_project_key"] == project_key)
+        & (working["_discipline_key"] == discipline_key)
+        & (working["_document_number_key"] == number_key)
+    ].copy()
+
+    if same_number.empty:
+        return {"type": "new_document", "matches": same_number}
+
+    same_title = same_number[same_number["_title_key"] == title_key].copy()
+    same_revision = same_title[same_title["_revision_key"] == revision_key].copy()
+
+    if not same_revision.empty:
+        return {"type": "exact_duplicate", "matches": same_revision}
+
+    if not same_title.empty:
+        return {"type": "new_revision", "matches": same_title}
+
+    return {"type": "similar_document_number", "matches": same_number}
+
+
 # -----------------------------
 # Current register state
 # -----------------------------
@@ -1927,7 +2336,6 @@ else:
     health_note = "Priority review needed"
 
 
-# NATIVE MATERIAL ICON SIDEBAR V5
 # -----------------------------
 # Sidebar and page shell
 # -----------------------------
@@ -1941,11 +2349,9 @@ valid_pages = {
     "Add document",
     "Import CSV",
     "PDF intake",
-    "Excel intake",
     "Documents",
     "Register comparison",
-    "Quality review",
-    "Manual review",
+    "Documents needing attention",
     "Revision history",
     "Administration",
 }
@@ -1955,26 +2361,13 @@ if st.session_state.get("active_page") not in valid_pages:
 
 
 with st.sidebar:
-    st.markdown(
-        """
-        <div class="dc-sidebar-brand">
-            <div class="dc-sidebar-logo">DC</div>
-            <div>
-                <div class="dc-sidebar-brand-title">Document Control<br>AI Assistant</div>
-                <div class="dc-sidebar-brand-subtitle">
-                    Controlled information workspace
-                </div>
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+    st.markdown("## Document Control")
+    st.caption("Register governance workspace")
 
     active_page = st.session_state["active_page"]
 
     st.button(
         "Dashboard",
-        icon=":material/home:",
         key="nav_dashboard",
         type="primary" if active_page == "Dashboard" else "secondary",
         use_container_width=True,
@@ -1982,154 +2375,89 @@ with st.sidebar:
         args=("Dashboard",),
     )
 
-    add_pages = {"Add document", "Import CSV", "PDF intake", "Excel intake"}
-    document_pages = {"Documents", "Register comparison"}
-    review_pages = {"Quality review", "Manual review"}
-    history_pages = {"Revision history", "Administration"}
+    st.markdown("#### Add document")
+    st.button(
+        "Add manually",
+        key="nav_add_manually",
+        type="primary" if active_page == "Add document" else "secondary",
+        use_container_width=True,
+        on_click=set_active_page,
+        args=("Add document",),
+    )
+    st.button(
+        "Upload Excel or CSV register",
+        key="nav_import_csv",
+        type="primary" if active_page == "Import CSV" else "secondary",
+        use_container_width=True,
+        on_click=set_active_page,
+        args=("Import CSV",),
+    )
+    st.button(
+        "Upload PDF and extract information",
+        key="nav_pdf_intake",
+        type="primary" if active_page == "PDF intake" else "secondary",
+        use_container_width=True,
+        on_click=set_active_page,
+        args=("PDF intake",),
+    )
 
-    with st.expander(
-        "Add document",
-        expanded=active_page in add_pages,
-        icon=":material/create_new_folder:",
-    ):
-        st.button(
-            "Manual entry",
-            icon=":material/edit_note:",
-            key="nav_add_manually",
-            type="primary" if active_page == "Add document" else "secondary",
-            use_container_width=True,
-            on_click=set_active_page,
-            args=("Add document",),
-        )
-        st.button(
-            "Import register",
-            icon=":material/table_view:",
-            key="nav_import_csv",
-            type="primary" if active_page == "Import CSV" else "secondary",
-            use_container_width=True,
-            on_click=set_active_page,
-            args=("Import CSV",),
-        )
-        st.button(
-            "Extract from PDF",
-            icon=":material/picture_as_pdf:",
-            key="nav_pdf_intake",
-            type="primary" if active_page == "PDF intake" else "secondary",
-            use_container_width=True,
-            on_click=set_active_page,
-            args=("PDF intake",),
-        )
-        st.button(
-            "Extract from Excel",
-            icon=":material/grid_on:",
-            key="nav_excel_intake",
-            type="primary" if active_page == "Excel intake" else "secondary",
-            use_container_width=True,
-            on_click=set_active_page,
-            args=("Excel intake",),
-        )
-
-    with st.expander(
+    st.markdown("#### Manage")
+    st.button(
         "Documents",
-        expanded=active_page in document_pages,
-        icon=":material/description:",
-    ):
-        st.button(
-            "All documents",
-            icon=":material/folder_open:",
-            key="nav_documents",
-            type="primary" if active_page == "Documents" else "secondary",
-            use_container_width=True,
-            on_click=set_active_page,
-            args=("Documents",),
-        )
-        st.button(
-            "Compare registers",
-            icon=":material/balance:",
-            key="nav_register_comparison",
-            type="primary" if active_page == "Register comparison" else "secondary",
-            use_container_width=True,
-            on_click=set_active_page,
-            args=("Register comparison",),
-        )
+        key="nav_documents",
+        type="primary" if active_page == "Documents" else "secondary",
+        use_container_width=True,
+        on_click=set_active_page,
+        args=("Documents",),
+    )
+    st.button(
+        "Register comparison",
+        key="nav_register_comparison",
+        type="primary" if active_page == "Register comparison" else "secondary",
+        use_container_width=True,
+        on_click=set_active_page,
+        args=("Register comparison",),
+    )
 
-    with st.expander(
-        "Review",
-        expanded=active_page in review_pages,
-        icon=":material/fact_check:",
-    ):
-        st.button(
-            "Quality checks",
-            icon=":material/verified_user:",
-            key="nav_quality_review",
-            type="primary" if active_page == "Quality review" else "secondary",
-            use_container_width=True,
-            on_click=set_active_page,
-            args=("Quality review",),
-        )
-        st.button(
-            "Manual review",
-            icon=":material/person_search:",
-            key="nav_manual_review",
-            type="primary" if active_page == "Manual review" else "secondary",
-            use_container_width=True,
-            on_click=set_active_page,
-            args=("Manual review",),
-        )
+    st.markdown("#### Review")
+    st.button(
+        "Documents needing attention",
+        key="nav_documents_attention",
+        type="primary" if active_page == "Documents needing attention" else "secondary",
+        use_container_width=True,
+        on_click=set_active_page,
+        args=("Documents needing attention",),
+    )
 
-    with st.expander(
-        "History & settings",
-        expanded=active_page in history_pages,
-        icon=":material/settings:",
-    ):
-        st.button(
-            "Revision history",
-            icon=":material/history:",
-            key="nav_revision_history",
-            type="primary" if active_page == "Revision history" else "secondary",
-            use_container_width=True,
-            on_click=set_active_page,
-            args=("Revision history",),
-        )
-        st.button(
-            "Administration",
-            icon=":material/admin_panel_settings:",
-            key="nav_administration",
-            type="primary" if active_page == "Administration" else "secondary",
-            use_container_width=True,
-            on_click=set_active_page,
-            args=("Administration",),
-        )
+    st.markdown("#### History and settings")
+    st.button(
+        "Revision history",
+        key="nav_revision_history",
+        type="primary" if active_page == "Revision history" else "secondary",
+        use_container_width=True,
+        on_click=set_active_page,
+        args=("Revision history",),
+    )
+    st.button(
+        "Administration",
+        key="nav_administration",
+        type="primary" if active_page == "Administration" else "secondary",
+        use_container_width=True,
+        on_click=set_active_page,
+        args=("Administration",),
+    )
 
     page = st.session_state["active_page"]
 
-    st.markdown(
-        f"""
-        <div class="dc-sidebar-status">
-            <div class="dc-sidebar-status-title">Workspace overview</div>
-            <div class="dc-sidebar-status-grid">
-                <div class="dc-sidebar-status-item">
-                    <div class="dc-sidebar-status-value">{len(documents_df)}</div>
-                    <div class="dc-sidebar-status-label">Document records</div>
-                </div>
-                <div class="dc-sidebar-status-item">
-                    <div class="dc-sidebar-status-value">{len(all_pdf_files_df)}</div>
-                    <div class="dc-sidebar-status-label">Controlled files</div>
-                </div>
-                <div class="dc-sidebar-status-item">
-                    <div class="dc-sidebar-status-value">{len(open_review_cases_df)}</div>
-                    <div class="dc-sidebar-status-label">Open reviews</div>
-                </div>
-                <div class="dc-sidebar-status-item">
-                    <div class="dc-sidebar-status-value">{health_score}/100</div>
-                    <div class="dc-sidebar-status-label">Register health</div>
-                </div>
-            </div>
-            <div class="dc-sidebar-demo">● FICTIONAL DEMO DATA ONLY</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+    st.divider()
+    st.markdown("#### Workspace status")
+    st.write(f"**{len(documents_df)}** active records")
+    st.write(f"**{len(all_pdf_files_df)}** PDF files")
+    st.write(f"**{len(open_review_cases_df)}** need attention")
+    st.write(f"**{len(archived_documents_df)}** archived records")
+    st.write(f"**{health_score}/100** register health")
+    st.caption("Local SQLite database and file library - Demo data only")
+
 
 st.markdown(
     """
@@ -2144,10 +2472,9 @@ st.markdown(
             <span class="hero-badge">Metadata validation</span>
             <span class="hero-badge">Duplicate protection</span>
             <span class="hero-badge">Revision tracking</span>
-            <span class="hero-badge">CSV import</span>
+            <span class="hero-badge">Excel + CSV intake</span>
             <span class="hero-badge">Register comparison</span>
             <span class="hero-badge">PDF metadata extraction</span>
-            <span class="hero-badge">Excel document extraction</span>
             <span class="hero-badge">PDF document library</span>
             <span class="hero-badge">Project + discipline folders</span>
             <span class="hero-badge">Manual review + approval</span>
@@ -2193,7 +2520,7 @@ if page == "Dashboard":
     )
 
     if documents_df.empty:
-        st.info("The register is empty. Add a document manually or import a CSV register.")
+        st.info("The register is empty. Add a document manually or upload an Excel/CSV register.")
     else:
         left, right = st.columns([1.25, 1])
 
@@ -2369,32 +2696,55 @@ elif page == "Add document":
             ):
                 st.error("When a Due Date is provided, Created Date cannot be later than it.")
             else:
-                possible_duplicate = make_document_key(
-                    document_number,
-                    title,
-                    revision,
-                    project,
-                    discipline,
-                ) in existing_document_keys(documents_df)
+                relationship = classify_incoming_document(
+                    new_document,
+                    documents_df,
+                )
                 exact_same_metadata = make_record_signature(
                     new_document
                 ) in existing_record_signatures(documents_df)
+                possible_duplicate = relationship["type"] in {
+                    "exact_duplicate",
+                    "similar_document_number",
+                }
 
                 if exact_same_metadata:
                     st.error(
-                        "An identical register row is already stored. No additional copy was created."
+                        "The same document record is already stored. "
+                        "No additional copy was created."
                     )
-                elif possible_duplicate and not allow_possible_duplicate:
+                elif (
+                    relationship["type"] == "exact_duplicate"
+                    and not allow_possible_duplicate
+                ):
                     st.error(
-                        "A record with the same project, discipline, document number, title and revision already exists. Tick the manual-review option only when the records genuinely need comparison."
+                        "The same document number, title and revision already exist. "
+                        "Compare the records before saving another copy."
+                    )
+                elif (
+                    relationship["type"] == "similar_document_number"
+                    and not allow_possible_duplicate
+                ):
+                    st.error(
+                        "The same document number already exists with a different title. "
+                        "Check whether this is a correction or a separate document."
                     )
                 else:
                     add_document(new_document)
-                    message = (
-                        "Possible duplicate saved and added to Manual review."
-                        if possible_duplicate
-                        else "Document saved successfully. The form has been cleared."
-                    )
+
+                    if relationship["type"] == "new_revision":
+                        message = (
+                            f"New revision {new_document['revision']} added. "
+                            "It was not treated as a duplicate."
+                        )
+                    elif possible_duplicate:
+                        message = (
+                            "The possible duplicate was saved and added to "
+                            "Documents needing attention."
+                        )
+                    else:
+                        message = "Document saved successfully."
+
                     st.session_state["flash_message"] = (
                         "success",
                         message,
@@ -2403,13 +2753,17 @@ elif page == "Add document":
 
 
 # -----------------------------
-# Import CSV
+# Excel and CSV register intake
 # -----------------------------
 
 elif page == "Import CSV":
     render_section_header(
-        "Import a CSV register",
-        "Preview and validate the file before importing. Exact duplicates are separated and will not be added again.",
+        "Upload an Excel or CSV register",
+        "Match the source columns, correct the records, review duplicate and revision analysis, then approve the rows you want to add.",
+    )
+
+    st.info(
+        "Nothing is imported automatically. The source file is previewed and every row can be corrected before approval."
     )
 
     template_df = pd.DataFrame(
@@ -2431,151 +2785,361 @@ elif page == "Import CSV":
         ]
     )
 
-    st.download_button(
-        "Download CSV template",
-        data=template_df.to_csv(index=False).encode("utf-8-sig"),
-        file_name="document_register_template.csv",
-        mime="text/csv",
-        use_container_width=False,
+    template_left, template_right = st.columns(2)
+    with template_left:
+        st.download_button(
+            "Download CSV template",
+            data=template_df.to_csv(index=False).encode("utf-8-sig"),
+            file_name="document_register_template.csv",
+            mime="text/csv",
+            use_container_width=True,
+        )
+    with template_right:
+        excel_template = io.BytesIO()
+        with pd.ExcelWriter(excel_template, engine="openpyxl") as writer:
+            template_df.to_excel(writer, index=False, sheet_name="Document Register")
+        st.download_button(
+            "Download Excel template",
+            data=excel_template.getvalue(),
+            file_name="document_register_template.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True,
+        )
+
+    uploaded_register = st.file_uploader(
+        "Upload an Excel or CSV document register",
+        type=["xlsx", "xls", "csv"],
+        key="register_intake_upload",
     )
 
-    uploaded_file = st.file_uploader(
-        "Choose a CSV document register",
-        type=["csv"],
-    )
-
-    if uploaded_file is not None:
+    if uploaded_register is not None:
         try:
-            raw_df = read_uploaded_csv(uploaded_file)
-            missing_columns = [
-                column
-                for column in ["document_number", "title"]
-                if column not in raw_df.columns
-            ]
+            extension = Path(uploaded_register.name).suffix.lower()
+            selected_sheet = ""
 
-            if missing_columns:
-                st.error(
-                    "The CSV is missing essential columns: "
-                    + ", ".join(missing_columns)
-                )
+            if extension == ".csv":
+                raw_register = read_uploaded_csv(uploaded_register)
+                source_type = "CSV"
             else:
-                prepared_df = prepare_uploaded_register(raw_df)
-                prepared_df["_identity_key"] = prepared_df.apply(
-                    lambda row: make_document_key(
-                        row["document_number"],
-                        row["title"],
-                        row["revision"],
-                        row["project"],
-                        row["discipline"],
-                    ),
-                    axis=1,
+                sheet_names = get_excel_sheet_names(uploaded_register)
+                if not sheet_names:
+                    raise ValueError("The Excel workbook does not contain a readable worksheet.")
+                selected_sheet = st.selectbox(
+                    "Choose the worksheet",
+                    sheet_names,
+                    key="register_intake_sheet",
                 )
-                prepared_df["_signature"] = prepared_df.apply(
-                    make_record_signature,
-                    axis=1,
+                raw_register = read_uploaded_excel_sheet(
+                    uploaded_register,
+                    selected_sheet,
+                )
+                source_type = "Excel"
+
+            raw_register = normalise_register_source_dataframe(raw_register)
+
+            if raw_register.empty:
+                st.warning("The selected register does not contain any data rows.")
+            else:
+                st.markdown("### 1. Source preview")
+                st.caption(
+                    f"{source_type} file: {uploaded_register.name}"
+                    + (f" · Worksheet: {selected_sheet}" if selected_sheet else "")
+                    + f" · {len(raw_register)} row(s)"
+                )
+                st.dataframe(
+                    raw_register.head(25),
+                    use_container_width=True,
+                    hide_index=True,
+                    height=300,
                 )
 
-                invalid_rows = prepared_df[
-                    (prepared_df["document_number"] == "")
-                    | (prepared_df["title"] == "")
-                ].copy()
+                source_columns = list(raw_register.columns)
+                automatic_mapping = suggest_register_column_mapping(source_columns)
+                file_key = hashlib.sha256(uploaded_register.getvalue()).hexdigest()[:10]
+                mapping = {}
 
-                valid_rows = prepared_df.drop(index=invalid_rows.index).copy()
+                with st.expander("2. Review column matching", expanded=True):
+                    st.caption(
+                        "The app has suggested a source column for each register field. "
+                        "Change any incorrect match before continuing."
+                    )
+                    mapping_columns = st.columns(3)
+                    options = ["Not mapped"] + source_columns
 
-                duplicate_inside_mask = valid_rows.duplicated(
-                    subset=["_signature"], keep="first"
+                    for position, target_field in enumerate(CSV_COLUMNS):
+                        suggested_source = automatic_mapping.get(target_field, "")
+                        default_index = (
+                            options.index(suggested_source)
+                            if suggested_source in options
+                            else 0
+                        )
+                        with mapping_columns[position % 3]:
+                            selected_source = st.selectbox(
+                                REGISTER_FIELD_LABELS[target_field],
+                                options,
+                                index=default_index,
+                                key=(
+                                    f"register_map_{file_key}_"
+                                    f"{normalize_column_name(selected_sheet)}_"
+                                    f"{target_field}"
+                                ),
+                            )
+                            mapping[target_field] = (
+                                "" if selected_source == "Not mapped" else selected_source
+                            )
+
+                mapped_register = build_mapped_register(raw_register, mapping)
+
+                st.markdown("### 3. Review and correct records")
+                st.caption(
+                    "Edit any value that was mapped incorrectly. Changes here affect only "
+                    "the preview; the source file is never overwritten."
                 )
-                duplicate_inside_csv = valid_rows[duplicate_inside_mask].copy()
-                valid_rows = valid_rows[~duplicate_inside_mask].copy()
+
+                edited_register = st.data_editor(
+                    mapped_register,
+                    use_container_width=True,
+                    hide_index=True,
+                    num_rows="fixed",
+                    height=420,
+                    key=f"register_editor_{file_key}_{normalize_column_name(selected_sheet)}",
+                    column_config={
+                        "document_number": st.column_config.TextColumn("Document Number", width="medium"),
+                        "title": st.column_config.TextColumn("Document Title", width="large"),
+                        "project": st.column_config.TextColumn("Project", width="medium"),
+                        "discipline": st.column_config.TextColumn("Discipline", width="medium"),
+                        "revision": st.column_config.TextColumn("Revision", width="small"),
+                        "status": st.column_config.TextColumn("Official Status", width="medium"),
+                        "owner": st.column_config.TextColumn("Owner", width="medium"),
+                        "originator": st.column_config.TextColumn("Originator", width="medium"),
+                        "created_date": st.column_config.TextColumn("Date Received", width="small"),
+                        "due_date": st.column_config.TextColumn("Due Date (optional)", width="small"),
+                        "file_name": st.column_config.TextColumn("File Name", width="large"),
+                        "notes": st.column_config.TextColumn("Notes", width="large"),
+                    },
+                )
+
+                cleaned_register = edited_register.copy()
+                for column in CSV_COLUMNS:
+                    if column not in cleaned_register.columns:
+                        cleaned_register[column] = ""
+                    cleaned_register[column] = (
+                        cleaned_register[column]
+                        .fillna("")
+                        .astype(str)
+                        .str.strip()
+                    )
+                cleaned_register = cleaned_register[CSV_COLUMNS].reset_index(drop=True)
 
                 database_signatures = existing_record_signatures(documents_df)
-                already_exists_mask = valid_rows["_signature"].isin(database_signatures)
-                already_in_database = valid_rows[already_exists_mask].copy()
-                new_rows = valid_rows[~already_exists_mask].copy()
+                seen_upload_signatures = set()
+                analysis_rows = []
 
-                database_identity_keys = existing_document_keys(documents_df)
-                possible_duplicates = new_rows[
-                    new_rows["_identity_key"].isin(database_identity_keys)
-                ].copy()
+                for row_index, row in cleaned_register.iterrows():
+                    record = {column: clean_text(row[column]) for column in CSV_COLUMNS}
+                    signature = make_record_signature(record)
+                    missing_fields = [
+                        field
+                        for field in REQUIRED_FIELDS
+                        if not clean_text(record.get(field, ""))
+                    ]
+                    minimum_information_missing = (
+                        not record["document_number"] or not record["title"]
+                    )
+                    repeated_in_upload = signature in seen_upload_signatures
+                    already_stored = signature in database_signatures
+                    relationship = classify_incoming_document(record, documents_df)
+
+                    if minimum_information_missing:
+                        analysis = "Cannot import"
+                        detail = "Document number and title are required"
+                        default_import = False
+                    elif repeated_in_upload:
+                        analysis = "Repeated in uploaded file"
+                        detail = "An identical row already appears earlier in this upload"
+                        default_import = False
+                    elif already_stored:
+                        analysis = "Already stored"
+                        detail = "The complete record already exists in the app"
+                        default_import = False
+                    elif relationship["type"] == "exact_duplicate":
+                        analysis = "Possible duplicate"
+                        detail = "The same document number, title and revision already exist"
+                        default_import = False
+                    elif relationship["type"] == "new_revision":
+                        analysis = "New revision"
+                        detail = "The document exists, but this revision is new"
+                        default_import = not missing_fields
+                    elif relationship["type"] == "similar_document_number":
+                        analysis = "Similar document number"
+                        detail = "The document number exists with a different title"
+                        default_import = False
+                    elif missing_fields:
+                        analysis = "Missing mandatory information"
+                        detail = "Complete the highlighted fields before importing"
+                        default_import = False
+                    else:
+                        analysis = "New document"
+                        detail = "Ready to add to the register"
+                        default_import = True
+
+                    analysis_rows.append(
+                        {
+                            "Import": default_import,
+                            "Source Row": row_index + 2,
+                            "Document Number": record["document_number"],
+                            "Title": record["title"],
+                            "Revision": record["revision"],
+                            "Analysis": analysis,
+                            "Explanation": detail,
+                            "Missing Information": ", ".join(
+                                REGISTER_FIELD_LABELS.get(field, field)
+                                for field in missing_fields
+                            ),
+                            "_row_index": row_index,
+                            "_eligible": analysis not in {
+                                "Cannot import",
+                                "Repeated in uploaded file",
+                                "Already stored",
+                                "Possible duplicate",
+                            },
+                        }
+                    )
+                    seen_upload_signatures.add(signature)
+
+                analysis_df = pd.DataFrame(analysis_rows)
+                ready_count = int(analysis_df["Import"].sum()) if not analysis_df.empty else 0
+                new_revision_count = int((analysis_df["Analysis"] == "New revision").sum()) if not analysis_df.empty else 0
+                check_count = int(
+                    analysis_df["Analysis"].isin(
+                        ["Similar document number", "Missing mandatory information"]
+                    ).sum()
+                ) if not analysis_df.empty else 0
+                duplicate_count = int(
+                    analysis_df["Analysis"].isin(
+                        ["Already stored", "Possible duplicate", "Repeated in uploaded file"]
+                    ).sum()
+                ) if not analysis_df.empty else 0
 
                 render_metric_cards(
                     [
-                        ("CSV rows", len(prepared_df), "Rows read from file", ""),
-                        ("New records", len(new_rows), "Ready to import", "health-good" if len(new_rows) else ""),
-                        ("Already stored", len(already_in_database), "Identical rows skipped", ""),
-                        ("Possible duplicates", len(possible_duplicates), "Imported for manual review", "health-watch" if len(possible_duplicates) else ""),
-                        ("Repeated in CSV", len(duplicate_inside_csv), "Identical extra rows skipped", "health-watch" if len(duplicate_inside_csv) else ""),
-                        ("Invalid rows", len(invalid_rows), "Missing number or title", "health-risk" if len(invalid_rows) else ""),
+                        ("Rows found", len(cleaned_register), "In uploaded register", ""),
+                        ("Ready to import", ready_count, "Selected by default", "health-good" if ready_count else ""),
+                        ("New revisions", new_revision_count, "Not treated as duplicates", "health-good" if new_revision_count else ""),
+                        ("Please check", check_count, "Needs correction or confirmation", "health-watch" if check_count else ""),
+                        ("Duplicates skipped", duplicate_count, "Not selected for import", "health-risk" if duplicate_count else ""),
                     ]
                 )
 
-                st.subheader("Import preview")
-                display_table(
-                    prepared_df.drop(columns=["_identity_key", "_signature"]),
-                    height=350,
+                st.markdown("### 4. Select records to import")
+                st.caption(
+                    "Rows marked as possible duplicates or already stored cannot be imported "
+                    "from this screen. Correct the source values or compare the records first."
                 )
 
-                with st.expander("Rows already stored", expanded=False):
-                    if already_in_database.empty:
-                        st.success("No identical stored rows were found.")
-                    else:
-                        display_table(already_in_database.drop(columns=["_identity_key", "_signature"]), height=260)
+                selection_df = st.data_editor(
+                    analysis_df.drop(columns=["_row_index", "_eligible"]),
+                    use_container_width=True,
+                    hide_index=True,
+                    num_rows="fixed",
+                    height=360,
+                    key=f"register_selection_{file_key}_{normalize_column_name(selected_sheet)}",
+                    disabled=[
+                        "Source Row",
+                        "Document Number",
+                        "Title",
+                        "Revision",
+                        "Analysis",
+                        "Explanation",
+                        "Missing Information",
+                    ],
+                    column_config={
+                        "Import": st.column_config.CheckboxColumn("Import", width="small"),
+                        "Source Row": st.column_config.NumberColumn("Row", width="small"),
+                        "Document Number": st.column_config.TextColumn(width="medium"),
+                        "Title": st.column_config.TextColumn(width="large"),
+                        "Revision": st.column_config.TextColumn(width="small"),
+                        "Analysis": st.column_config.TextColumn(width="medium"),
+                        "Explanation": st.column_config.TextColumn(width="large"),
+                        "Missing Information": st.column_config.TextColumn(width="large"),
+                    },
+                )
 
-                with st.expander("Repeated rows inside the CSV", expanded=False):
-                    if duplicate_inside_csv.empty:
-                        st.success("No completely identical repeated rows were found inside the CSV.")
-                    else:
-                        display_table(duplicate_inside_csv.drop(columns=["_identity_key", "_signature"]), height=260)
+                selected_positions = [
+                    position
+                    for position, selected_value in enumerate(selection_df["Import"].tolist())
+                    if bool(selected_value)
+                ]
+                selected_count = len(selected_positions)
 
-                with st.expander("Possible duplicates requiring manual review", expanded=False):
-                    if possible_duplicates.empty:
-                        st.success("No incoming rows share an existing document identity with different metadata.")
-                    else:
-                        st.warning(
-                            "These rows have the same project, discipline, document number, title and revision as an existing record, but other metadata differs. They will be imported and sent to Manual review."
-                        )
-                        display_table(
-                            possible_duplicates.drop(columns=["_identity_key", "_signature"]),
-                            height=280,
-                        )
-
-                with st.expander("Invalid rows", expanded=False):
-                    if invalid_rows.empty:
-                        st.success("Every row has a document number and title.")
-                    else:
-                        display_table(invalid_rows.drop(columns=["_identity_key", "_signature"]), height=260)
-
-                if new_rows.empty:
-                    st.info("There are no new valid records to import.")
-                else:
+                export_corrected, import_action = st.columns([1, 1])
+                with export_corrected:
+                    st.download_button(
+                        "Download corrected preview",
+                        data=cleaned_register.to_csv(index=False).encode("utf-8-sig"),
+                        file_name="corrected_register_preview.csv",
+                        mime="text/csv",
+                        use_container_width=True,
+                    )
+                with import_action:
                     confirmed = st.checkbox(
-                        f"I reviewed the preview and want to import {len(new_rows)} new record(s)."
+                        f"I reviewed the analysis and want to import {selected_count} selected record(s).",
+                        key=f"confirm_register_import_{file_key}",
                     )
 
-                    if st.button(
-                        "Import new records",
-                        type="primary",
-                        disabled=not confirmed,
-                        use_container_width=True,
-                    ):
-                        for _, row in new_rows.iterrows():
-                            add_document(
-                                {
-                                    column: clean_text(row[column])
-                                    for column in CSV_COLUMNS
-                                }
-                            )
+                if st.button(
+                    "Approve and add selected records",
+                    type="primary",
+                    disabled=not confirmed or selected_count == 0,
+                    use_container_width=True,
+                    key=f"approve_register_import_{file_key}",
+                ):
+                    imported_count = 0
+                    skipped_count = 0
 
-                        st.session_state["flash_message"] = (
-                            "success",
-                            f"{len(new_rows)} new document record(s) imported. Identical stored and repeated rows were skipped; possible duplicate identities were imported for manual review.",
-                        )
-                        st.rerun()
+                    for position in selected_positions:
+                        analysis_row = analysis_df.iloc[position]
+                        source_row_index = int(analysis_row["_row_index"])
+                        record = {
+                            column: clean_text(cleaned_register.iloc[source_row_index][column])
+                            for column in CSV_COLUMNS
+                        }
+                        relationship = classify_incoming_document(record, documents_df)
+                        missing_fields = [
+                            field for field in REQUIRED_FIELDS if not record[field]
+                        ]
+                        signature = make_record_signature(record)
+
+                        if (
+                            missing_fields
+                            or not record["document_number"]
+                            or not record["title"]
+                            or signature in database_signatures
+                            or relationship["type"] == "exact_duplicate"
+                        ):
+                            skipped_count += 1
+                            continue
+
+                        add_document(record)
+                        imported_count += 1
+                        database_signatures.add(signature)
+
+                    st.session_state["flash_message"] = (
+                        "success" if imported_count else "warning",
+                        f"{imported_count} record(s) added to the register. "
+                        f"{skipped_count} selected row(s) were skipped because they were incomplete or duplicated.",
+                    )
+                    st.rerun()
 
         except pd.errors.EmptyDataError:
-            st.error("The uploaded CSV file is empty.")
+            st.error("The uploaded register is empty.")
+        except ImportError as error:
+            st.error(
+                "An Excel reader is missing. Install openpyxl for .xlsx files and xlrd for .xls files."
+            )
+            st.code(str(error))
         except Exception as error:
-            st.error("The CSV could not be processed.")
+            st.error("The register could not be processed.")
             st.code(str(error))
 
 
@@ -3170,27 +3734,48 @@ elif page == "Register comparison":
 
 elif page == "PDF intake":
     render_section_header(
-        "PDF intake and metadata extraction",
-        "Upload a PDF first. The assistant reads available text, suggests document "
-        "metadata and lets a person review every field before the record and PDF are saved.",
+        "Upload PDF and extract information",
+        "Choose the document language, extract suggested metadata, compare it with the PDF and approve the record only after checking every field.",
     )
 
     st.info(
-        "Automatic extraction is a suggestion, not a final decision. "
-        "Review and correct every value before saving it to the controlled register."
+        "The PDF is not added to the register until you select Approve and add to register. "
+        "This version reads selectable text; scanned image PDFs still require manual entry."
     )
 
-    uploaded_intake_pdf = st.file_uploader(
-        "Upload a PDF document",
-        type=["pdf"],
-        accept_multiple_files=False,
-        key="pdf_intake_upload",
-    )
+    if "pdf_intake_upload_version" not in st.session_state:
+        st.session_state["pdf_intake_upload_version"] = 0
+
+    intake_top_left, intake_top_right = st.columns([1, 2])
+    with intake_top_left:
+        selected_language = st.selectbox(
+            "Document language",
+            PDF_LANGUAGE_OPTIONS,
+            key="pdf_intake_language",
+            help=(
+                "English, Polish and Arabic include dedicated document-label matching. "
+                "Other uses general filename clues and manual review."
+            ),
+        )
+    with intake_top_right:
+        uploaded_intake_pdf = st.file_uploader(
+            "Upload a PDF document",
+            type=["pdf"],
+            accept_multiple_files=False,
+            key=f"pdf_intake_upload_{st.session_state['pdf_intake_upload_version']}",
+        )
 
     if uploaded_intake_pdf is not None:
         intake_file_bytes = uploaded_intake_pdf.getvalue()
         intake_file_hash = hashlib.sha256(intake_file_bytes).hexdigest()
         existing_file = find_document_file_by_hash(intake_file_hash)
+
+        previous_hash = st.session_state.get("pdf_intake_result_hash")
+        previous_language = st.session_state.get("pdf_intake_result_language")
+        if previous_hash != intake_file_hash or previous_language != selected_language:
+            st.session_state.pop("pdf_intake_result", None)
+            st.session_state["pdf_intake_result_hash"] = intake_file_hash
+            st.session_state["pdf_intake_result_language"] = selected_language
 
         if existing_file:
             st.error(
@@ -3201,509 +3786,318 @@ elif page == "PDF intake":
         elif not intake_file_bytes.startswith(b"%PDF-"):
             st.error("The selected file does not contain a valid PDF signature.")
         else:
-            try:
-                extraction = extract_pdf_metadata(
-                    intake_file_bytes,
-                    uploaded_intake_pdf.name,
+            extract_col, cancel_col = st.columns([1, 1])
+            with extract_col:
+                extract_requested = st.button(
+                    "Extract information",
+                    type="primary",
+                    use_container_width=True,
+                    key="pdf_intake_extract",
                 )
-            except Exception as error:
-                st.error("The PDF could not be read.")
-                st.code(str(error))
+            with cancel_col:
+                if st.button(
+                    "Cancel upload",
+                    use_container_width=True,
+                    key="pdf_intake_cancel_before_review",
+                ):
+                    for state_key in [
+                        "pdf_intake_result",
+                        "pdf_intake_result_hash",
+                        "pdf_intake_result_language",
+                    ]:
+                        st.session_state.pop(state_key, None)
+                    st.session_state["pdf_intake_upload_version"] += 1
+                    st.rerun()
+
+            if extract_requested:
+                try:
+                    with st.spinner("Reading the PDF and preparing suggested metadata..."):
+                        st.session_state["pdf_intake_result"] = extract_pdf_metadata(
+                            intake_file_bytes,
+                            uploaded_intake_pdf.name,
+                            language=selected_language,
+                        )
+                        st.session_state["pdf_intake_result_hash"] = intake_file_hash
+                        st.session_state["pdf_intake_result_language"] = selected_language
+                except Exception as error:
+                    st.error("The PDF could not be read.")
+                    st.code(str(error))
+
+            extraction = st.session_state.get("pdf_intake_result")
+
+            if extraction is None:
+                st.caption(
+                    "Select Extract information to begin. No document record has been created."
+                )
             else:
-                extracted = extraction["metadata"]
-                extracted_sources = extraction["sources"]
+                extracted = extraction.get("metadata", {})
+                extracted_sources = extraction.get("sources", {})
+                extracted_confidence = extraction.get("confidence", {})
 
                 st.success(
-                    f"Read {extraction['pages_read']} of "
-                    f"{extraction['total_pages']} page(s). "
-                    "Review the suggested values below."
+                    f"Read {extraction.get('pages_read', 0)} of "
+                    f"{extraction.get('total_pages', 0)} page(s). "
+                    "Review the PDF and suggested values side by side."
                 )
+                st.caption(extraction.get("language_note", ""))
 
-                for warning in extraction["warnings"]:
+                for warning in extraction.get("warnings", []):
                     st.warning(warning)
 
-                extraction_preview = pd.DataFrame(
-                    [
-                        {
-                            "Field": field.replace("_", " ").title(),
-                            "Suggested value": clean_text(extracted.get(field, "")),
-                            "Detected from": clean_text(
-                                extracted_sources.get(field, "")
-                            ) or "Not detected",
-                        }
-                        for field in [
-                            "document_number",
-                            "title",
-                            "project",
-                            "discipline",
-                            "revision",
-                            "status",
-                            "owner",
-                            "originator",
-                            "created_date",
-                            "due_date",
-                            "file_name",
-                        ]
+                confidence_values = [
+                    extracted_confidence.get(field, "not_found")
+                    for field in [
+                        "document_number",
+                        "title",
+                        "project",
+                        "discipline",
+                        "revision",
+                        "status",
+                        "owner",
+                        "originator",
+                        "created_date",
                     ]
+                ]
+                confidence_columns = st.columns(3)
+                confidence_columns[0].metric(
+                    "High confidence",
+                    confidence_values.count("high"),
                 )
-                st.dataframe(
-                    extraction_preview,
-                    use_container_width=True,
-                    hide_index=True,
+                confidence_columns[1].metric(
+                    "Please check",
+                    confidence_values.count("check"),
+                )
+                confidence_columns[2].metric(
+                    "Not found",
+                    confidence_values.count("not_found"),
                 )
 
-                with st.expander("PDF text preview", expanded=False):
-                    if extraction["text_preview"]:
-                        st.text(extraction["text_preview"])
-                    else:
-                        st.info(
-                            "No selectable text was found. Enter the metadata manually."
+                preview_column, metadata_column = st.columns([1.08, 1], gap="large")
+
+                with preview_column:
+                    st.markdown('<div class="intake-step">PDF preview</div>', unsafe_allow_html=True)
+                    render_pdf_preview(
+                        intake_file_bytes,
+                        uploaded_intake_pdf.name,
+                        height=820,
+                    )
+                    st.download_button(
+                        "Download PDF preview",
+                        data=intake_file_bytes,
+                        file_name=uploaded_intake_pdf.name,
+                        mime="application/pdf",
+                        use_container_width=True,
+                        key="pdf_intake_preview_download",
+                    )
+                    with st.expander("Extracted text preview", expanded=False):
+                        if extraction.get("text_preview"):
+                            st.text(extraction["text_preview"])
+                        else:
+                            st.info(
+                                "No selectable text was found. Enter the metadata manually."
+                            )
+
+                with metadata_column:
+                    st.markdown('<div class="intake-step">Review extracted information</div>', unsafe_allow_html=True)
+
+                    reextract_col, reset_col = st.columns(2)
+                    with reextract_col:
+                        if st.button(
+                            "Re-extract",
+                            use_container_width=True,
+                            key="pdf_intake_reextract",
+                        ):
+                            try:
+                                with st.spinner("Re-reading the PDF..."):
+                                    st.session_state["pdf_intake_result"] = extract_pdf_metadata(
+                                        intake_file_bytes,
+                                        uploaded_intake_pdf.name,
+                                        language=selected_language,
+                                    )
+                                st.rerun()
+                            except Exception as error:
+                                st.error("The PDF could not be re-read.")
+                                st.code(str(error))
+                    with reset_col:
+                        if st.button(
+                            "Cancel",
+                            use_container_width=True,
+                            key="pdf_intake_cancel_review",
+                        ):
+                            for state_key in [
+                                "pdf_intake_result",
+                                "pdf_intake_result_hash",
+                                "pdf_intake_result_language",
+                            ]:
+                                st.session_state.pop(state_key, None)
+                            st.session_state["pdf_intake_upload_version"] += 1
+                            st.rerun()
+
+                    intake_discipline_options, intake_discipline_index = (
+                        select_options_with_current(
+                            DISCIPLINE_OPTIONS,
+                            extracted.get("discipline", ""),
                         )
-
-                intake_discipline_options, intake_discipline_index = (
-                    select_options_with_current(
-                        DISCIPLINE_OPTIONS,
-                        extracted.get("discipline", ""),
                     )
-                )
-                intake_status_options, intake_status_index = (
-                    select_options_with_current(
-                        STATUS_OPTIONS,
-                        extracted.get("status", ""),
+                    intake_status_options, intake_status_index = (
+                        select_options_with_current(
+                            STATUS_OPTIONS,
+                            extracted.get("status", ""),
+                        )
                     )
-                )
 
-                with st.form("pdf_intake_review_form", border=True):
-                    st.markdown("### Review extracted metadata")
-                    left, right = st.columns(2)
+                    with st.form("pdf_intake_review_form", border=True):
+                        st.markdown("#### Essential information")
 
-                    with left:
+                        render_confidence_label(
+                            "Document Number",
+                            extracted_confidence.get("document_number", "not_found"),
+                            extracted_sources.get("document_number", ""),
+                        )
                         intake_document_number = st.text_input(
                             "Document Number *",
                             value=clean_text(extracted.get("document_number", "")),
+                            label_visibility="collapsed",
+                        )
+
+                        render_confidence_label(
+                            "Document Title",
+                            extracted_confidence.get("title", "not_found"),
+                            extracted_sources.get("title", ""),
                         )
                         intake_title = st.text_input(
                             "Document Title *",
                             value=clean_text(extracted.get("title", "")),
-                        )
-                        intake_project = st.text_input(
-                            "Project *",
-                            value=clean_text(extracted.get("project", "")),
-                        )
-                        intake_discipline = st.selectbox(
-                            "Discipline *",
-                            intake_discipline_options,
-                            index=intake_discipline_index,
-                        )
-                        intake_revision = st.text_input(
-                            "Revision *",
-                            value=clean_text(extracted.get("revision", "")),
-                        )
-                        intake_status = st.selectbox(
-                            "Status *",
-                            intake_status_options,
-                            index=intake_status_index,
+                            label_visibility="collapsed",
                         )
 
-                    with right:
-                        intake_owner = st.text_input(
-                            "Owner *",
-                            value=clean_text(extracted.get("owner", "")),
-                        )
-                        intake_originator = st.text_input(
-                            "Originator",
-                            value=clean_text(extracted.get("originator", "")),
-                        )
-                        intake_created_date = st.date_input(
-                            "Created Date",
-                            value=optional_date_value(
-                                extracted.get("created_date", "")
-                            ),
-                        )
-                        intake_due_date = st.date_input(
-                            "Due Date (optional)",
-                            value=optional_date_value(
-                                extracted.get("due_date", "")
-                            ),
-                        )
-                        intake_file_name = st.text_input(
-                            "File Name",
-                            value=uploaded_intake_pdf.name,
-                        )
-                        intake_notes = st.text_area(
-                            "Notes",
-                            value=clean_text(extracted.get("notes", "")),
-                            height=100,
-                        )
-
-                    allow_intake_duplicate = st.checkbox(
-                        "Allow this possible duplicate to be saved for manual review",
-                        value=False,
-                        help=(
-                            "Use this only when the document genuinely needs comparison "
-                            "with an existing record."
-                        ),
-                    )
-                    confirm_intake_review = st.checkbox(
-                        "I reviewed the extracted values and confirm that the PDF "
-                        "belongs to this register record."
-                    )
-
-                    save_intake = st.form_submit_button(
-                        "Save register record and PDF",
-                        type="primary",
-                        use_container_width=True,
-                    )
-
-                if save_intake:
-                    intake_document = {
-                        "document_number": clean_text(intake_document_number),
-                        "title": clean_text(intake_title),
-                        "project": clean_text(intake_project),
-                        "discipline": clean_text(intake_discipline),
-                        "revision": clean_text(intake_revision),
-                        "status": clean_text(intake_status),
-                        "owner": clean_text(intake_owner),
-                        "originator": clean_text(intake_originator),
-                        "created_date": (
-                            str(intake_created_date)
-                            if intake_created_date
-                            else ""
-                        ),
-                        "due_date": (
-                            str(intake_due_date)
-                            if intake_due_date
-                            else ""
-                        ),
-                        "file_name": clean_text(intake_file_name),
-                        "notes": clean_text(intake_notes),
-                    }
-
-                    missing_required = [
-                        field
-                        for field in REQUIRED_FIELDS
-                        if not intake_document[field]
-                    ]
-
-                    if not confirm_intake_review:
-                        st.error(
-                            "Tick the confirmation box to confirm that you reviewed "
-                            "the extracted values before saving."
-                        )
-                    elif missing_required:
-                        st.error(
-                            "Complete all required fields: "
-                            + ", ".join(
-                                field.replace("_", " ").title()
-                                for field in missing_required
+                        essential_left, essential_right = st.columns(2)
+                        with essential_left:
+                            render_confidence_label(
+                                "Revision",
+                                extracted_confidence.get("revision", "not_found"),
+                                extracted_sources.get("revision", ""),
                             )
-                        )
-                    elif (
-                        intake_created_date is not None
-                        and intake_due_date is not None
-                        and intake_created_date > intake_due_date
-                    ):
-                        st.error("When a Due Date is provided, Created Date cannot be later than it.")
-                    else:
-                        possible_duplicate = make_document_key(
-                            intake_document["document_number"],
-                            intake_document["title"],
-                            intake_document["revision"],
-                            intake_document["project"],
-                            intake_document["discipline"],
-                        ) in existing_document_keys(documents_df)
-
-                        exact_same_metadata = (
-                            make_record_signature(intake_document)
-                            in existing_record_signatures(documents_df)
-                        )
-
-                        if exact_same_metadata:
-                            st.error(
-                                "An identical register row is already stored. "
-                                "No additional copy was created."
-                            )
-                        elif possible_duplicate and not allow_intake_duplicate:
-                            st.error(
-                                "A record with the same project, discipline, "
-                                "document number, title and revision already exists. "
-                                "Tick the manual-review option only when the records "
-                                "genuinely need comparison."
-                            )
-                        else:
-                            target_path = build_pdf_storage_path(
-                                intake_document,
-                                uploaded_intake_pdf.name,
-                                intake_file_hash,
+                            intake_revision = st.text_input(
+                                "Revision *",
+                                value=clean_text(extracted.get("revision", "")),
+                                label_visibility="collapsed",
                             )
 
-                            try:
-                                target_path.write_bytes(intake_file_bytes)
-                                intake_document_id = add_document(intake_document)
-                                add_document_file(
-                                    {
-                                        "document_id": intake_document_id,
-                                        "project": intake_document["project"],
-                                        "discipline": intake_document["discipline"],
-                                        "original_file_name": uploaded_intake_pdf.name,
-                                        "stored_file_name": target_path.name,
-                                        "stored_path": str(target_path),
-                                        "mime_type": "application/pdf",
-                                        "file_size": len(intake_file_bytes),
-                                        "sha256": intake_file_hash,
-                                    }
-                                )
-                            except Exception as error:
-                                if target_path.exists():
-                                    target_path.unlink()
-                                st.error(
-                                    "The record or PDF could not be saved. "
-                                    "No PDF file was kept in the library."
-                                )
-                                st.code(str(error))
-                            else:
-                                st.session_state["flash_message"] = (
-                                    "success",
-                                    "PDF metadata reviewed. The register record and "
-                                    "controlled PDF were saved successfully.",
-                                )
-                                st.rerun()
+                            render_confidence_label(
+                                "Discipline",
+                                extracted_confidence.get("discipline", "not_found"),
+                                extracted_sources.get("discipline", ""),
+                            )
+                            intake_discipline = st.selectbox(
+                                "Discipline *",
+                                intake_discipline_options,
+                                index=intake_discipline_index,
+                                label_visibility="collapsed",
+                            )
 
+                            render_confidence_label(
+                                "Official Status",
+                                extracted_confidence.get("status", "not_found"),
+                                extracted_sources.get("status", ""),
+                            )
+                            intake_status = st.selectbox(
+                                "Official Status *",
+                                intake_status_options,
+                                index=intake_status_index,
+                                label_visibility="collapsed",
+                            )
 
+                        with essential_right:
+                            render_confidence_label(
+                                "Project",
+                                extracted_confidence.get("project", "not_found"),
+                                extracted_sources.get("project", ""),
+                            )
+                            intake_project = st.text_input(
+                                "Project *",
+                                value=clean_text(extracted.get("project", "")),
+                                label_visibility="collapsed",
+                            )
 
+                            render_confidence_label(
+                                "Owner",
+                                extracted_confidence.get("owner", "not_found"),
+                                extracted_sources.get("owner", ""),
+                            )
+                            intake_owner = st.text_input(
+                                "Owner *",
+                                value=clean_text(extracted.get("owner", "")),
+                                label_visibility="collapsed",
+                            )
 
-# -----------------------------
-# Excel document intake
-# -----------------------------
+                            render_confidence_label(
+                                "Originator",
+                                extracted_confidence.get("originator", "not_found"),
+                                extracted_sources.get("originator", ""),
+                            )
+                            intake_originator = st.text_input(
+                                "Originator",
+                                value=clean_text(extracted.get("originator", "")),
+                                label_visibility="collapsed",
+                            )
 
-elif page == "Excel intake":
-    render_section_header(
-        "Upload Excel document and extract information",
-        "Upload one controlled Excel document, review the detected metadata and save the original workbook with its register record.",
-    )
+                        st.markdown("#### Additional information")
+                        additional_left, additional_right = st.columns(2)
 
-    st.info(
-        "This page is for one document created in Excel, such as a method statement, "
-        "datasheet, checklist or technical form. Use Import CSV register for files "
-        "containing many document records."
-    )
+                        with additional_left:
+                            render_confidence_label(
+                                "Date Received",
+                                extracted_confidence.get("created_date", "not_found"),
+                                extracted_sources.get("created_date", ""),
+                            )
+                            intake_created_date = st.date_input(
+                                "Date Received",
+                                value=optional_date_value(
+                                    extracted.get("created_date", "")
+                                ),
+                                label_visibility="collapsed",
+                            )
 
-    uploaded_excel_document = st.file_uploader(
-        "Upload one Excel document",
-        type=["xlsx", "xlsm"],
-        key="excel_document_intake_file",
-        help="Supported formats: .xlsx and .xlsm",
-    )
+                            intake_file_name = st.text_input(
+                                "File Name",
+                                value=uploaded_intake_pdf.name,
+                            )
 
-    if uploaded_excel_document is None:
-        st.markdown(
-            """
-            <div class="notice notice-info">
-                Upload a workbook to preview its first populated sheet and extract
-                document metadata. Nothing is saved until you review and confirm it.
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-    else:
-        excel_file_bytes = uploaded_excel_document.getvalue()
-        excel_file_hash = hashlib.sha256(excel_file_bytes).hexdigest()
-        existing_excel_file = find_document_file_by_hash(excel_file_hash)
+                        with additional_right:
+                            intake_due_date = st.date_input(
+                                "Due Date (optional)",
+                                value=optional_date_value(
+                                    extracted.get("due_date", "")
+                                ),
+                            )
+                            intake_notes = st.text_area(
+                                "Notes",
+                                value=clean_text(extracted.get("notes", "")),
+                                height=100,
+                            )
 
-        if existing_excel_file:
-            st.error(
-                "This exact Excel file is already stored against "
-                f"{clean_text(existing_excel_file.get('document_number', 'a document'))} "
-                f"revision {clean_text(existing_excel_file.get('revision', '')) or 'not set'}."
-            )
-        else:
-            try:
-                excel_result = extract_excel_metadata(excel_file_bytes)
-            except Exception as error:
-                st.error(
-                    "The Excel document could not be read. Check that it is a valid "
-                    ".xlsx or .xlsm workbook and is not password protected."
-                )
-                st.code(str(error))
-            else:
-                excel_metadata = excel_result.get("metadata", {})
-                excel_confidence = int(excel_result.get("confidence", 0))
-                excel_warnings = excel_result.get("warnings", [])
-                excel_preview = excel_result.get("preview", pd.DataFrame())
-
-                metric_1, metric_2, metric_3 = st.columns(3)
-                metric_1.metric("Extraction confidence", f"{excel_confidence}%")
-                metric_2.metric(
-                    "Fields detected",
-                    sum(bool(value) for value in excel_metadata.values()),
-                )
-                metric_3.metric(
-                    "Workbook sheet",
-                    clean_text(excel_result.get("sheet_name", "Not detected")),
-                )
-
-                if excel_warnings:
-                    for warning in excel_warnings:
-                        st.warning(warning)
-                else:
-                    st.success(
-                        "The main metadata fields were detected. Review every value "
-                        "before saving because extraction is rule-based."
-                    )
-
-                form_column, preview_column = st.columns([1.05, 1], gap="large")
-
-                with preview_column:
-                    st.subheader("Workbook preview")
-                    st.caption(
-                        "Preview of the first populated sheet. Formatting is simplified "
-                        "inside the app; the original workbook will be stored unchanged."
-                    )
-                    if excel_preview.empty:
-                        st.info("No visible cell values were found for the preview.")
-                    else:
-                        preview_for_display = excel_preview.copy()
-                        preview_for_display.columns = [
-                            f"Column {index + 1}"
-                            for index in range(len(preview_for_display.columns))
-                        ]
-                        st.dataframe(
-                            preview_for_display,
-                            use_container_width=True,
-                            hide_index=True,
-                            height=520,
-                        )
-
-                with form_column:
-                    st.subheader("Review extracted metadata")
-
-                    status_options, status_index = select_options_with_current(
-                        STATUS_OPTIONS,
-                        excel_metadata.get("status", ""),
-                    )
-                    discipline_options, discipline_index = select_options_with_current(
-                        DISCIPLINE_OPTIONS,
-                        excel_metadata.get("discipline", ""),
-                    )
-
-                    extracted_notes = [
-                        "Imported from a single controlled Excel document.",
-                    ]
-                    extra_note_fields = [
-                        ("Document type", "document_type"),
-                        ("Prepared by", "prepared_by"),
-                        ("Checked by", "checked_by"),
-                        ("Approved by", "approved_by"),
-                    ]
-                    for note_label, note_key in extra_note_fields:
-                        note_value = clean_text(excel_metadata.get(note_key, ""))
-                        if note_value:
-                            extracted_notes.append(f"{note_label}: {note_value}")
-
-                    default_owner = clean_text(
-                        excel_metadata.get("owner", "")
-                        or excel_metadata.get("prepared_by", "")
-                    )
-                    default_notes = "\n".join(extracted_notes)
-                    default_created_date = optional_date_value(
-                        excel_metadata.get("issue_date", "")
-                    )
-                    default_due_date = optional_date_value(
-                        excel_metadata.get("due_date", "")
-                    )
-
-                    with st.form(
-                        "excel_document_intake_form",
-                        clear_on_submit=False,
-                        border=True,
-                    ):
-                        intake_document_number = st.text_input(
-                            "Document Number *",
-                            value=clean_text(
-                                excel_metadata.get("document_number", "")
-                            ),
-                        )
-                        intake_title = st.text_input(
-                            "Document Title *",
-                            value=clean_text(excel_metadata.get("title", "")),
-                        )
-                        intake_project = st.text_input(
-                            "Project *",
-                            value=clean_text(excel_metadata.get("project", "")),
-                        )
-                        intake_discipline = st.selectbox(
-                            "Discipline *",
-                            discipline_options,
-                            index=discipline_index,
-                        )
-                        intake_revision = st.text_input(
-                            "Revision *",
-                            value=clean_text(excel_metadata.get("revision", "")),
-                        )
-                        intake_status = st.selectbox(
-                            "Status *",
-                            status_options,
-                            index=status_index,
-                        )
-                        intake_owner = st.text_input(
-                            "Owner *",
-                            value=default_owner,
-                            help=(
-                                "The existing database requires an owner. The extracted "
-                                "Prepared By value is suggested, but you can replace it."
-                            ),
-                        )
-                        intake_originator = st.text_input(
-                            "Originator",
-                            value=clean_text(
-                                excel_metadata.get("originator", "")
-                            ),
-                        )
-                        intake_created_date = st.date_input(
-                            "Issue / Created Date",
-                            value=default_created_date,
-                        )
-                        intake_due_date = st.date_input(
-                            "Due Date (optional)",
-                            value=default_due_date,
-                            help=(
-                                "Due Date is optional because this application is not an EDMS."
-                            ),
-                        )
-                        intake_file_name = st.text_input(
-                            "File Name",
-                            value=uploaded_excel_document.name,
-                        )
-                        intake_notes = st.text_area(
-                            "Notes",
-                            value=default_notes,
-                            height=145,
-                        )
-
-                        allow_excel_duplicate = st.checkbox(
-                            "Allow this possible duplicate to be saved for manual review",
+                        allow_intake_duplicate = st.checkbox(
+                            "Allow a possible duplicate to be saved for comparison",
                             value=False,
                             help=(
-                                "Use this only when a record with the same identity and "
-                                "revision genuinely needs comparison."
+                                "Use this only when the record genuinely needs comparison "
+                                "with an existing document."
                             ),
                         )
-                        confirm_excel_review = st.checkbox(
-                            "I reviewed the extracted values and the workbook preview.",
-                            value=False,
+                        confirm_intake_review = st.checkbox(
+                            "I reviewed the PDF and confirm that the corrected information is accurate."
                         )
 
-                        save_excel_document = st.form_submit_button(
-                            "Save Excel document",
+                        save_intake = st.form_submit_button(
+                            "Approve and add to register",
                             type="primary",
                             use_container_width=True,
                         )
 
-                    if save_excel_document:
-                        excel_document = {
-                            "document_number": clean_text(
-                                intake_document_number
-                            ),
+                    if save_intake:
+                        intake_document = {
+                            "document_number": clean_text(intake_document_number),
                             "title": clean_text(intake_title),
                             "project": clean_text(intake_project),
                             "discipline": clean_text(intake_discipline),
@@ -3728,19 +4122,18 @@ elif page == "Excel intake":
                         missing_required = [
                             field
                             for field in REQUIRED_FIELDS
-                            if not excel_document[field]
+                            if not intake_document[field]
                         ]
 
-                        if not confirm_excel_review:
+                        if not confirm_intake_review:
                             st.error(
-                                "Tick the confirmation box after reviewing the "
-                                "extracted values and workbook preview."
+                                "Confirm that you reviewed the PDF and corrected information before approval."
                             )
                         elif missing_required:
                             st.error(
                                 "Complete all required fields: "
                                 + ", ".join(
-                                    field.replace("_", " ").title()
+                                    REGISTER_FIELD_LABELS.get(field, field)
                                     for field in missing_required
                                 )
                             )
@@ -3750,122 +4143,101 @@ elif page == "Excel intake":
                             and intake_created_date > intake_due_date
                         ):
                             st.error(
-                                "When a Due Date is provided, the Issue / Created "
-                                "Date cannot be later than it."
+                                "When a Due Date is provided, Date Received cannot be later than it."
                             )
                         else:
-                            possible_duplicate = make_document_key(
-                                excel_document["document_number"],
-                                excel_document["title"],
-                                excel_document["revision"],
-                                excel_document["project"],
-                                excel_document["discipline"],
-                            ) in existing_document_keys(documents_df)
-
+                            relationship = classify_incoming_document(
+                                intake_document,
+                                documents_df,
+                            )
+                            possible_duplicate = relationship["type"] in {
+                                "exact_duplicate",
+                                "similar_document_number",
+                            }
                             exact_same_metadata = (
-                                make_record_signature(excel_document)
+                                make_record_signature(intake_document)
                                 in existing_record_signatures(documents_df)
                             )
 
                             if exact_same_metadata:
                                 st.error(
-                                    "An identical register row is already stored. "
+                                    "The same document record is already stored. "
                                     "No additional copy was created."
                                 )
                             elif (
-                                possible_duplicate
-                                and not allow_excel_duplicate
+                                relationship["type"] == "exact_duplicate"
+                                and not allow_intake_duplicate
                             ):
                                 st.error(
-                                    "A record with the same project, discipline, "
-                                    "document number, title and revision already exists. "
-                                    "Tick the manual-review option only when the records "
-                                    "genuinely need comparison."
+                                    "The same document number, title and revision already exist. "
+                                    "Compare the records before saving another copy."
+                                )
+                            elif (
+                                relationship["type"] == "similar_document_number"
+                                and not allow_intake_duplicate
+                            ):
+                                st.error(
+                                    "The same document number exists with a different title. "
+                                    "Check whether this is a correction or a separate document."
                                 )
                             else:
-                                def excel_safe_path_part(value):
-                                    cleaned = "".join(
-                                        character
-                                        if character.isalnum()
-                                        or character in "._-"
-                                        else "_"
-                                        for character in str(value or "").strip()
-                                    )
-                                    while "__" in cleaned:
-                                        cleaned = cleaned.replace("__", "_")
-                                    return (
-                                        cleaned.strip("._-")
-                                        or "Unassigned"
-                                    )
-
-                                excel_folder = (
-                                    FILES_ROOT
-                                    / excel_safe_path_part(
-                                        excel_document["project"]
-                                    )
-                                    / excel_safe_path_part(
-                                        excel_document["discipline"]
-                                    )
-                                    / "Excel"
-                                )
-                                excel_folder.mkdir(
-                                    parents=True,
-                                    exist_ok=True,
-                                )
-
-                                stored_excel_name = (
-                                    f"{excel_file_hash[:12]}_"
-                                    f"{excel_safe_path_part(uploaded_excel_document.name)}"
-                                )
-                                excel_target_path = (
-                                    excel_folder / stored_excel_name
-                                )
-
-                                suffix = Path(
-                                    uploaded_excel_document.name
-                                ).suffix.casefold()
-                                excel_mime_type = (
-                                    "application/vnd.ms-excel.sheet.macroEnabled.12"
-                                    if suffix == ".xlsm"
-                                    else "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                                target_path = build_pdf_storage_path(
+                                    intake_document,
+                                    uploaded_intake_pdf.name,
+                                    intake_file_hash,
                                 )
 
                                 try:
-                                    excel_target_path.write_bytes(
-                                        excel_file_bytes
-                                    )
-                                    excel_document_id = add_document(
-                                        excel_document
-                                    )
+                                    target_path.write_bytes(intake_file_bytes)
+                                    intake_document_id = add_document(intake_document)
                                     add_document_file(
                                         {
-                                            "document_id": excel_document_id,
-                                            "project": excel_document["project"],
-                                            "discipline": excel_document["discipline"],
-                                            "original_file_name": uploaded_excel_document.name,
-                                            "stored_file_name": excel_target_path.name,
-                                            "stored_path": str(excel_target_path),
-                                            "mime_type": excel_mime_type,
-                                            "file_size": len(excel_file_bytes),
-                                            "sha256": excel_file_hash,
+                                            "document_id": intake_document_id,
+                                            "project": intake_document["project"],
+                                            "discipline": intake_document["discipline"],
+                                            "original_file_name": uploaded_intake_pdf.name,
+                                            "stored_file_name": target_path.name,
+                                            "stored_path": str(target_path),
+                                            "mime_type": "application/pdf",
+                                            "file_size": len(intake_file_bytes),
+                                            "sha256": intake_file_hash,
                                         }
                                     )
                                 except Exception as error:
-                                    if excel_target_path.exists():
-                                        excel_target_path.unlink()
+                                    if target_path.exists():
+                                        target_path.unlink()
                                     st.error(
-                                        "The register record or Excel file could not "
-                                        "be saved. No workbook file was kept."
+                                        "The record or PDF could not be saved. "
+                                        "No PDF file was kept in the library."
                                     )
                                     st.code(str(error))
                                 else:
+                                    if relationship["type"] == "new_revision":
+                                        success_message = (
+                                            f"Revision {intake_document['revision']} was approved "
+                                            "and added as a new revision with its controlled PDF."
+                                        )
+                                    elif possible_duplicate:
+                                        success_message = (
+                                            "The document was added and marked for comparison."
+                                        )
+                                    else:
+                                        success_message = (
+                                            "The reviewed document and controlled PDF were added to the register."
+                                        )
+
+                                    for state_key in [
+                                        "pdf_intake_result",
+                                        "pdf_intake_result_hash",
+                                        "pdf_intake_result_language",
+                                    ]:
+                                        st.session_state.pop(state_key, None)
+                                    st.session_state["pdf_intake_upload_version"] += 1
                                     st.session_state["flash_message"] = (
                                         "success",
-                                        "Excel metadata reviewed. The register record "
-                                        "and original workbook were saved successfully.",
+                                        success_message,
                                     )
                                     st.rerun()
-
 
 
 # -----------------------------
@@ -3875,47 +4247,76 @@ elif page == "Excel intake":
 elif page == "Documents":
     render_section_header(
         "Documents",
-        "Search the controlled register and manage the PDF files attached to each document record in one place.",
+        "Manage document metadata, official status, workflow status, PDFs, revisions, archive state and audit history from one place.",
     )
 
-    if documents_df.empty:
+    source_documents = all_documents_df.copy()
+
+    if source_documents.empty:
         st.info(
             "No documents have been added yet. Use Add document to enter a record "
-            "manually, import a CSV register or upload a PDF for metadata extraction."
+            "manually, import a register or extract information from a PDF."
         )
     else:
+        latest_ids = latest_revision_ids(source_documents)
+        source_documents["_is_latest"] = source_documents["id"].map(
+            lambda value: int(value) in latest_ids
+        )
+        source_documents["record_state"] = source_documents["is_archived"].map(
+            lambda value: "Archived" if int(value or 0) else "Active"
+        )
+        source_documents["workflow_status"] = source_documents.apply(
+            lambda row: workflow_status_for_document(row, open_review_cases_df),
+            axis=1,
+        )
+        source_documents["review_reason"] = source_documents["id"].map(
+            lambda value: "; ".join(
+                sorted(
+                    {
+                        attention_problem_label(issue)
+                        for issue in review_cases_for_document(
+                            int(value), open_review_cases_df
+                        ).get("issue_type", pd.Series(dtype=str)).tolist()
+                    }
+                )
+            )
+        )
+
         def clear_documents_filters():
             st.session_state["documents_search"] = ""
             st.session_state["documents_projects"] = []
             st.session_state["documents_disciplines"] = []
-            st.session_state["documents_statuses"] = []
+            st.session_state["documents_official_statuses"] = []
+            st.session_state["documents_workflow_statuses"] = []
 
         project_values = sorted(
             value
-            for value in documents_df["project"].dropna().astype(str).unique()
+            for value in source_documents["project"].dropna().astype(str).unique()
             if clean_text(value)
         )
         discipline_values = sorted(
             value
-            for value in documents_df["discipline"].dropna().astype(str).unique()
+            for value in source_documents["discipline"].dropna().astype(str).unique()
             if clean_text(value)
         )
-        status_values = sorted(
+        official_status_values = sorted(
             value
-            for value in documents_df["status"].dropna().astype(str).unique()
+            for value in source_documents["status"].dropna().astype(str).unique()
             if clean_text(value)
         )
+        workflow_status_values = [
+            value
+            for value in WORKFLOW_STATUS_OPTIONS
+            if value in set(source_documents["workflow_status"].astype(str))
+        ]
 
         with st.container(border=True):
             filter_header_left, filter_header_right = st.columns([5, 1])
-
             with filter_header_left:
-                st.markdown("### Filter documents")
+                st.markdown("### Find documents")
                 st.caption(
-                    "Search by document number or title, then narrow the results "
-                    "by project, discipline or status."
+                    "The default view shows active documents and only the latest revision."
                 )
-
             with filter_header_right:
                 st.button(
                     "Clear filters",
@@ -3924,39 +4325,73 @@ elif page == "Documents":
                     key="clear_documents_filters",
                 )
 
+            state_col, revision_col = st.columns(2)
+            with state_col:
+                record_state_filter = st.radio(
+                    "Record state",
+                    ["Active", "Archived", "All"],
+                    horizontal=True,
+                    key="documents_record_state",
+                )
+            with revision_col:
+                revision_view = st.radio(
+                    "Revision view",
+                    ["Latest revisions only", "All revisions", "Previous revisions"],
+                    horizontal=True,
+                    key="documents_revision_view",
+                )
+
             search_text = st.text_input(
                 "Search by document number or title",
                 placeholder="Enter a document number or document title",
                 key="documents_search",
             )
 
-            project_col, discipline_col, status_col = st.columns(3, gap="large")
-
-            with project_col:
+            filter_one, filter_two, filter_three, filter_four = st.columns(4)
+            with filter_one:
                 selected_projects = st.multiselect(
                     "Project",
                     project_values,
-                    placeholder="Choose one or more projects",
+                    placeholder="All projects",
                     key="documents_projects",
                 )
-
-            with discipline_col:
+            with filter_two:
                 selected_disciplines = st.multiselect(
                     "Discipline",
                     discipline_values,
-                    placeholder="Choose one or more disciplines",
+                    placeholder="All disciplines",
                     key="documents_disciplines",
                 )
-
-            with status_col:
-                selected_statuses = st.multiselect(
-                    "Status",
-                    status_values,
-                    placeholder="Choose one or more statuses",
-                    key="documents_statuses",
+            with filter_three:
+                selected_official_statuses = st.multiselect(
+                    "Official document status",
+                    official_status_values,
+                    placeholder="All statuses",
+                    key="documents_official_statuses",
+                )
+            with filter_four:
+                selected_workflow_statuses = st.multiselect(
+                    "App workflow status",
+                    workflow_status_values,
+                    placeholder="All workflow states",
+                    key="documents_workflow_statuses",
                 )
 
-        filtered_documents = documents_df.copy()
+        filtered_documents = source_documents.copy()
+
+        if record_state_filter != "All":
+            filtered_documents = filtered_documents[
+                filtered_documents["record_state"] == record_state_filter
+            ]
+
+        if revision_view == "Latest revisions only":
+            filtered_documents = filtered_documents[
+                filtered_documents["_is_latest"]
+            ]
+        elif revision_view == "Previous revisions":
+            filtered_documents = filtered_documents[
+                ~filtered_documents["_is_latest"]
+            ]
 
         if search_text:
             search_key = normalized_key(search_text)
@@ -3973,322 +4408,958 @@ elif page == "Documents":
             filtered_documents = filtered_documents[
                 filtered_documents["project"].isin(selected_projects)
             ]
-
         if selected_disciplines:
             filtered_documents = filtered_documents[
                 filtered_documents["discipline"].isin(selected_disciplines)
             ]
-
-        if selected_statuses:
+        if selected_official_statuses:
             filtered_documents = filtered_documents[
-                filtered_documents["status"].isin(selected_statuses)
+                filtered_documents["status"].isin(selected_official_statuses)
+            ]
+        if selected_workflow_statuses:
+            filtered_documents = filtered_documents[
+                filtered_documents["workflow_status"].isin(selected_workflow_statuses)
             ]
 
         filtered_documents = filtered_documents.sort_values(
-            ["project", "discipline", "document_number", "revision", "id"]
+            ["project", "discipline", "document_number", "_is_latest", "revision", "id"],
+            ascending=[True, True, True, False, False, False],
         )
 
-        pdf_total = int(
-            pd.to_numeric(
-                filtered_documents.get("pdf_count", 0),
-                errors="coerce",
-            ).fillna(0).sum()
-        )
-        missing_pdf_total = int(
-            (
-                pd.to_numeric(
-                    filtered_documents.get("pdf_count", 0),
-                    errors="coerce",
-                ).fillna(0)
-                == 0
+        attention_count = int(
+            filtered_documents["workflow_status"].isin(
+                ["Needs checking", "Possible duplicate"]
             ).sum()
         )
-
         render_metric_cards(
             [
-                ("Matching records", len(filtered_documents), "Current filtered view", ""),
-                ("Total records", len(documents_df), "Complete register", ""),
+                ("Documents shown", len(filtered_documents), "Current filtered view", ""),
                 (
-                    "Unique documents",
-                    filtered_documents["document_number"].map(normalized_key).nunique(),
-                    "In current view",
+                    "Latest revisions",
+                    int(filtered_documents["_is_latest"].sum()),
+                    "Latest in each document family",
                     "",
                 ),
-                ("PDF files", pdf_total, "Attached to current records", ""),
                 (
-                    "Missing PDFs",
-                    missing_pdf_total,
-                    "Records without a controlled file",
-                    "health-watch" if missing_pdf_total else "health-good",
+                    "Need attention",
+                    attention_count,
+                    "Needs checking or possible duplicate",
+                    "health-watch" if attention_count else "health-good",
+                ),
+                (
+                    "PDF files",
+                    int(
+                        pd.to_numeric(
+                            filtered_documents.get("pdf_count", 0),
+                            errors="coerce",
+                        ).fillna(0).sum()
+                    ),
+                    "Attached controlled files",
+                    "",
+                ),
+                (
+                    "Archived",
+                    int((filtered_documents["record_state"] == "Archived").sum()),
+                    "Visible in this view",
+                    "",
                 ),
             ]
         )
 
-        register_columns = [
-            "document_number",
-            "title",
-            "project",
-            "discipline",
-            "revision",
-            "status",
-            "owner",
-            "pdf_count",
-        ]
-        register_rename = {
-            "document_number": "Document Number",
-            "title": "Title",
-            "project": "Project",
-            "discipline": "Discipline",
-            "revision": "Revision",
-            "status": "Status",
-            "owner": "Owner",
-            "pdf_count": "PDF Files",
-        }
-
-        st.subheader("Controlled document register")
-
+        st.subheader("Controlled documents")
         if filtered_documents.empty:
             st.info("No documents match the selected filters.")
         else:
             display_table(
                 filtered_documents,
-                columns=register_columns,
-                rename=register_rename,
+                columns=[
+                    "document_number",
+                    "title",
+                    "revision",
+                    "status",
+                    "workflow_status",
+                    "discipline",
+                    "project",
+                    "created_date",
+                    "originator",
+                    "pdf_count",
+                    "record_state",
+                    "review_reason",
+                ],
+                rename={
+                    "document_number": "Document Number",
+                    "title": "Title",
+                    "revision": "Revision",
+                    "status": "Official Status",
+                    "workflow_status": "Workflow Status",
+                    "discipline": "Discipline",
+                    "project": "Project",
+                    "created_date": "Date Received",
+                    "originator": "Originator",
+                    "pdf_count": "PDF Files",
+                    "record_state": "Record State",
+                    "review_reason": "Why It Needs Attention",
+                },
                 height=430,
-                row_height=34,
+                row_height=38,
                 column_config={
                     "Document Number": st.column_config.TextColumn(width="medium"),
                     "Title": st.column_config.TextColumn(width="large"),
-                    "Project": st.column_config.TextColumn(width="medium"),
-                    "Discipline": st.column_config.TextColumn(width="medium"),
                     "Revision": st.column_config.TextColumn(width="small"),
-                    "Status": st.column_config.TextColumn(width="medium"),
-                    "Owner": st.column_config.TextColumn(width="medium"),
-                    "PDF Files": st.column_config.NumberColumn(width="small"),
+                    "Official Status": st.column_config.TextColumn(width="medium"),
+                    "Workflow Status": st.column_config.TextColumn(width="medium"),
+                    "Why It Needs Attention": st.column_config.TextColumn(width="large"),
                 },
                 key="documents_register_table",
             )
 
-            export_left, export_right = st.columns([1, 4])
-            with export_left:
-                st.download_button(
-                    "Export current view",
-                    data=filtered_documents.drop(
-                        columns=["id"], errors="ignore"
-                    ).to_csv(index=False).encode("utf-8-sig"),
-                    file_name="document_register_export.csv",
-                    mime="text/csv",
-                    use_container_width=True,
-                    key="documents_export",
-                )
-            with export_right:
-                st.caption(
-                    f"The export contains {len(filtered_documents)} filtered record(s)."
-                )
-
-            st.divider()
-            st.subheader("Document details and attached PDFs")
-            st.caption(
-                "Select a register record to review its metadata, download its PDFs "
-                "or attach another controlled PDF."
+            st.download_button(
+                "Export current view",
+                data=filtered_documents.drop(
+                    columns=["id", "_is_latest"], errors="ignore"
+                ).to_csv(index=False).encode("utf-8-sig"),
+                file_name="document_register_export.csv",
+                mime="text/csv",
+                key="documents_export",
             )
 
+            st.divider()
+            st.subheader("Open one document")
             record_choices = build_record_choice_map(filtered_documents)
             selected_record_label = st.selectbox(
-                "Select a document record",
+                "Select a document",
                 list(record_choices.keys()),
                 key="documents_selected_record",
             )
             selected_record_id = record_choices[selected_record_label]
-            selected_record = filtered_documents[
-                filtered_documents["id"] == selected_record_id
+            selected_record = source_documents[
+                source_documents["id"] == selected_record_id
             ].iloc[0]
+            selected_cases = review_cases_for_document(
+                selected_record_id, open_review_cases_df
+            )
+            selected_files = get_document_files(document_id=int(selected_record_id))
 
-            details_df = pd.DataFrame(
+            heading_left, heading_right = st.columns([3, 1])
+            with heading_left:
+                st.markdown(
+                    f"## {clean_text(selected_record.get('document_number', '')) or 'Document number not set'}"
+                )
+                st.write(f"**{clean_text(selected_record.get('title', '')) or 'Untitled document'}**")
+            with heading_right:
+                workflow_value = workflow_status_for_document(
+                    selected_record, open_review_cases_df
+                )
+                if workflow_value == "Ready":
+                    st.success("Ready")
+                elif workflow_value == "Archived":
+                    st.info("Archived")
+                elif workflow_value == "Possible duplicate":
+                    st.error("Possible duplicate")
+                else:
+                    st.warning("Needs checking")
+
+            detail_columns = st.columns(4)
+            detail_columns[0].metric(
+                "Revision",
+                clean_text(selected_record.get("revision", "")) or "Not set",
+            )
+            detail_columns[1].metric(
+                "Official status",
+                clean_text(selected_record.get("status", "")) or "Not set",
+            )
+            detail_columns[2].metric(
+                "Discipline",
+                clean_text(selected_record.get("discipline", "")) or "Not set",
+            )
+            detail_columns[3].metric(
+                "PDF files",
+                int(selected_record.get("pdf_count", 0) or 0),
+            )
+
+            if selected_cases.empty:
+                st.success("This document has no open review issues.")
+            else:
+                st.warning("This document needs attention.")
+                display_table(
+                    attention_table(selected_cases),
+                    height=220,
+                    key="selected_document_attention",
+                )
+                if st.button(
+                    "Open Documents needing attention",
+                    key="open_attention_from_documents",
+                    type="primary",
+                ):
+                    st.session_state["active_page"] = "Documents needing attention"
+                    st.rerun()
+
+            files_tab, edit_tab, revisions_tab, audit_tab, archive_tab = st.tabs(
                 [
-                    {
-                        "Document Number": clean_text(
-                            selected_record.get("document_number", "")
-                        ),
-                        "Title": clean_text(selected_record.get("title", "")),
-                        "Project": clean_text(selected_record.get("project", "")),
-                        "Discipline": clean_text(
-                            selected_record.get("discipline", "")
-                        ),
-                        "Revision": clean_text(
-                            selected_record.get("revision", "")
-                        ),
-                        "Status": clean_text(selected_record.get("status", "")),
-                        "Owner": clean_text(selected_record.get("owner", "")),
-                        "Originator": clean_text(
-                            selected_record.get("originator", "")
-                        ),
-                        "Created Date": clean_text(
-                            selected_record.get("created_date", "")
-                        ),
-                    }
+                    "PDF files",
+                    "Edit metadata",
+                    "Revision history",
+                    "Audit history",
+                    "Archive",
                 ]
             )
-            st.dataframe(details_df, use_container_width=True, hide_index=True)
 
-            selected_files = get_document_files(
-                document_id=int(selected_record_id)
-            )
-
-            st.markdown("#### Attached PDF files")
-            render_attached_files(
-                selected_files,
-                key_prefix=f"documents_{selected_record_id}",
-                allow_delete=False,
-            )
-
-            st.markdown("#### Attach another PDF")
-            uploaded_pdf = st.file_uploader(
-                "Choose the controlled PDF",
-                type=["pdf"],
-                accept_multiple_files=False,
-                key=f"documents_pdf_upload_{selected_record_id}",
-            )
-
-            if uploaded_pdf is not None:
-                inspection = inspect_pdf_upload(uploaded_pdf, selected_record)
-
-                check_rows = pd.DataFrame(
-                    [
-                        {
-                            "Check": "Valid PDF file",
-                            "Result": (
-                                "Pass"
-                                if inspection["valid_header"]
-                                else "Fail"
-                            ),
-                            "Expected": "A valid PDF signature",
-                        },
-                        {
-                            "Check": "Document number in filename",
-                            "Result": (
-                                "Pass"
-                                if inspection["document_number_match"]
-                                else "Review"
-                            ),
-                            "Expected": clean_text(
-                                selected_record.get("document_number", "")
-                            ),
-                        },
-                        {
-                            "Check": "Revision in filename",
-                            "Result": (
-                                "Pass"
-                                if inspection["revision_match"]
-                                else "Review"
-                            ),
-                            "Expected": (
-                                clean_text(
-                                    selected_record.get("revision", "")
-                                )
-                                or "No revision required"
-                            ),
-                        },
-                        {
-                            "Check": "Identical file already stored",
-                            "Result": (
-                                "Fail"
-                                if inspection["duplicate_file"]
-                                else "Pass"
-                            ),
-                            "Expected": "Unique PDF content",
-                        },
-                    ]
-                )
-                st.dataframe(
-                    check_rows,
-                    use_container_width=True,
-                    hide_index=True,
-                )
-                st.caption(
-                    f"Selected file: {inspection['file_name']} · "
-                    f"{human_file_size(inspection['file_size'])}"
+            with files_tab:
+                st.markdown("#### Attached PDF")
+                render_attached_files(
+                    selected_files,
+                    key_prefix=f"documents_{selected_record_id}",
+                    allow_delete=False,
                 )
 
-                if inspection["duplicate_file"]:
-                    duplicate = inspection["duplicate_file"]
-                    st.error(
-                        "This exact PDF is already stored against "
-                        f"{duplicate['document_number']} revision "
-                        f"{duplicate['revision'] or 'not set'}."
-                    )
-                elif not inspection["valid_header"]:
-                    st.error(
-                        "The uploaded file does not contain a valid PDF signature."
-                    )
+                if not selected_files.empty and hasattr(st, "pdf"):
+                    preview_row = selected_files.iloc[0]
+                    preview_path = Path(clean_text(preview_row.get("stored_path", "")))
+                    if preview_path.exists():
+                        with st.expander("Open PDF preview", expanded=False):
+                            st.pdf(preview_path.read_bytes())
+
+                if int(selected_record.get("is_archived", 0) or 0):
+                    st.info("Archived records cannot receive new PDF files.")
                 else:
-                    naming_matches = (
-                        inspection["document_number_match"]
-                        and inspection["revision_match"]
+                    st.markdown("#### Attach another PDF")
+                    uploaded_pdf = st.file_uploader(
+                        "Choose the controlled PDF",
+                        type=["pdf"],
+                        accept_multiple_files=False,
+                        key=f"documents_pdf_upload_{selected_record_id}",
                     )
-                    allow_mismatch = False
 
-                    if not naming_matches:
-                        st.warning(
-                            "The PDF filename does not fully match the selected "
-                            "document number and revision."
+                    if uploaded_pdf is not None:
+                        inspection = inspect_pdf_upload(uploaded_pdf, selected_record)
+
+                        if inspection["duplicate_file"]:
+                            duplicate = inspection["duplicate_file"]
+                            st.error(
+                                "This is the same file already stored against "
+                                f"{duplicate['document_number']} revision "
+                                f"{duplicate['revision'] or 'not set'}."
+                            )
+                        elif not inspection["valid_header"]:
+                            st.error("The uploaded file is not a valid PDF.")
+                        else:
+                            naming_matches = (
+                                inspection["document_number_match"]
+                                and inspection["revision_match"]
+                            )
+                            mismatch_confirmed = naming_matches
+                            if not naming_matches:
+                                st.warning(
+                                    "The filename does not fully match the selected "
+                                    "document number and revision."
+                                )
+                                mismatch_confirmed = st.checkbox(
+                                    "I checked the file and confirm it belongs to this document.",
+                                    key=f"documents_mismatch_{selected_record_id}",
+                                )
+
+                            if st.button(
+                                "Add PDF",
+                                type="primary",
+                                use_container_width=True,
+                                key=f"documents_save_pdf_{selected_record_id}",
+                            ):
+                                if not mismatch_confirmed:
+                                    st.error("Confirm the filename mismatch before saving.")
+                                else:
+                                    target_path = build_pdf_storage_path(
+                                        selected_record,
+                                        inspection["file_name"],
+                                        inspection["file_hash"],
+                                    )
+                                    target_path.write_bytes(inspection["file_bytes"])
+                                    try:
+                                        add_document_file(
+                                            {
+                                                "document_id": int(selected_record_id),
+                                                "project": clean_text(
+                                                    selected_record.get("project", "")
+                                                ),
+                                                "discipline": clean_text(
+                                                    selected_record.get("discipline", "")
+                                                ),
+                                                "original_file_name": inspection["file_name"],
+                                                "stored_file_name": target_path.name,
+                                                "stored_path": str(target_path),
+                                                "mime_type": "application/pdf",
+                                                "file_size": inspection["file_size"],
+                                                "sha256": inspection["file_hash"],
+                                            }
+                                        )
+                                    except Exception:
+                                        if target_path.exists():
+                                            target_path.unlink()
+                                        raise
+
+                                    st.session_state["flash_message"] = (
+                                        "success",
+                                        "The PDF was attached to the document.",
+                                    )
+                                    st.rerun()
+
+            with edit_tab:
+                discipline_options, discipline_index = select_options_with_current(
+                    DISCIPLINE_OPTIONS, selected_record.get("discipline", "")
+                )
+                status_options, status_index = select_options_with_current(
+                    STATUS_OPTIONS, selected_record.get("status", "")
+                )
+
+                with st.form(f"documents_edit_{selected_record_id}", border=True):
+                    edit_left, edit_right = st.columns(2)
+                    with edit_left:
+                        edit_document_number = st.text_input(
+                            "Document Number *",
+                            value=clean_text(selected_record.get("document_number", "")),
                         )
-                        allow_mismatch = st.checkbox(
-                            "I reviewed the mismatch and confirm that this PDF "
-                            "belongs to the selected record.",
-                            key=(
-                                f"documents_allow_mismatch_{selected_record_id}_"
-                                f"{inspection['file_hash'][:8]}"
+                        edit_title = st.text_input(
+                            "Document Title *",
+                            value=clean_text(selected_record.get("title", "")),
+                        )
+                        edit_revision = st.text_input(
+                            "Revision *",
+                            value=clean_text(selected_record.get("revision", "")),
+                        )
+                        edit_status = st.selectbox(
+                            "Official document status *",
+                            status_options,
+                            index=status_index,
+                        )
+                        edit_discipline = st.selectbox(
+                            "Discipline *",
+                            discipline_options,
+                            index=discipline_index,
+                        )
+                        edit_project = st.text_input(
+                            "Project *",
+                            value=clean_text(selected_record.get("project", "")),
+                        )
+
+                    with edit_right:
+                        edit_originator = st.text_input(
+                            "Originator",
+                            value=clean_text(selected_record.get("originator", "")),
+                        )
+                        edit_date_received = st.date_input(
+                            "Date received",
+                            value=optional_date_value(
+                                selected_record.get("created_date", "")
                             ),
                         )
-
-                    can_store = naming_matches or allow_mismatch
-
-                    if st.button(
-                        "Save PDF to this document",
-                        type="primary",
-                        disabled=not can_store,
-                        use_container_width=True,
-                        key=(
-                            f"documents_save_pdf_{selected_record_id}_"
-                            f"{inspection['file_hash'][:8]}"
-                        ),
-                    ):
-                        target_path = build_pdf_storage_path(
-                            selected_record,
-                            inspection["file_name"],
-                            inspection["file_hash"],
+                        edit_owner = st.text_input(
+                            "Owner",
+                            value=clean_text(selected_record.get("owner", "")),
                         )
-                        target_path.write_bytes(inspection["file_bytes"])
+                        edit_file_name = st.text_input(
+                            "File Name",
+                            value=clean_text(selected_record.get("file_name", "")),
+                        )
+                        edit_notes = st.text_area(
+                            "Notes",
+                            value=clean_text(selected_record.get("notes", "")),
+                            height=110,
+                        )
 
-                        try:
-                            add_document_file(
-                                {
-                                    "document_id": int(selected_record_id),
-                                    "project": clean_text(
-                                        selected_record.get("project", "")
-                                    ),
-                                    "discipline": clean_text(
-                                        selected_record.get("discipline", "")
-                                    ),
-                                    "original_file_name": inspection["file_name"],
-                                    "stored_file_name": target_path.name,
-                                    "stored_path": str(target_path),
-                                    "mime_type": "application/pdf",
-                                    "file_size": inspection["file_size"],
-                                    "sha256": inspection["file_hash"],
-                                }
+                    edit_reviewer = st.text_input(
+                        "Updated by *",
+                        placeholder="Document controller or reviewer name",
+                    )
+                    edit_comments = st.text_area(
+                        "Reason for change *",
+                        placeholder="Explain what was changed and why.",
+                    )
+                    edit_confirmed = st.checkbox(
+                        "I checked the document information before saving."
+                    )
+                    edit_submitted = st.form_submit_button(
+                        "Save changes",
+                        type="primary",
+                        use_container_width=True,
+                    )
+
+                if edit_submitted:
+                    essential_values = {
+                        "document_number": clean_text(edit_document_number),
+                        "title": clean_text(edit_title),
+                        "revision": clean_text(edit_revision),
+                        "status": clean_text(edit_status),
+                        "discipline": clean_text(edit_discipline),
+                        "project": clean_text(edit_project),
+                    }
+                    missing_essential = [
+                        label
+                        for label, value in essential_values.items()
+                        if not value
+                    ]
+                    if not edit_confirmed:
+                        st.error("Confirm that you checked the information.")
+                    elif missing_essential:
+                        st.error(
+                            "Complete the essential fields: "
+                            + ", ".join(
+                                value.replace("_", " ").title()
+                                for value in missing_essential
                             )
-                        except Exception:
-                            if target_path.exists():
-                                target_path.unlink()
-                            raise
-
+                        )
+                    elif not clean_text(edit_reviewer) or not clean_text(edit_comments):
+                        st.error("Updated by and Reason for change are required.")
+                    else:
+                        updates = {
+                            **essential_values,
+                            "owner": clean_text(edit_owner),
+                            "originator": clean_text(edit_originator),
+                            "created_date": str(edit_date_received) if edit_date_received else "",
+                            "due_date": clean_text(selected_record.get("due_date", "")),
+                            "file_name": clean_text(edit_file_name),
+                            "notes": clean_text(edit_notes),
+                        }
+                        changed = update_document_details(
+                            selected_record_id,
+                            updates,
+                            clean_text(edit_reviewer),
+                            clean_text(edit_comments),
+                        )
                         st.session_state["flash_message"] = (
-                            "success",
-                            "PDF uploaded and linked to the selected document.",
+                            "success" if changed else "info",
+                            "Document metadata updated."
+                            if changed
+                            else "No metadata values changed.",
                         )
                         st.rerun()
+
+            with revisions_tab:
+                family_key = revision_family_key(selected_record)
+                family_rows = source_documents[
+                    source_documents.apply(revision_family_key, axis=1) == family_key
+                ].copy()
+                family_rows = sort_revision_history(family_rows)
+                if family_rows.empty:
+                    st.info("No revision history is available.")
+                else:
+                    display_table(
+                        family_rows,
+                        columns=[
+                            "revision_role",
+                            "revision",
+                            "status",
+                            "created_date",
+                            "created_at",
+                            "record_state",
+                            "pdf_count",
+                            "notes",
+                        ],
+                        rename={
+                            "revision_role": "Revision Role",
+                            "revision": "Revision",
+                            "status": "Official Status",
+                            "created_date": "Date Received",
+                            "created_at": "Registered Date",
+                            "record_state": "Record State",
+                            "pdf_count": "PDF Files",
+                            "notes": "Notes",
+                        },
+                        height=300,
+                    )
+
+            with audit_tab:
+                audit_history = get_audit_log()
+                if audit_history.empty:
+                    st.info("No audit events have been recorded.")
+                else:
+                    if "document_id" in audit_history.columns:
+                        audit_history = audit_history[
+                            audit_history["document_id"] == selected_record_id
+                        ]
+                    elif "record_id" in audit_history.columns:
+                        audit_history = audit_history[
+                            audit_history["record_id"] == selected_record_id
+                        ]
+                    elif "document_number" in audit_history.columns:
+                        audit_history = audit_history[
+                            audit_history["document_number"].map(normalized_key)
+                            == normalized_key(
+                                selected_record.get("document_number", "")
+                            )
+                        ]
+
+                    if audit_history.empty:
+                        st.info("No audit events are linked to this document.")
+                    else:
+                        display_table(
+                            audit_history,
+                            rename={
+                                "event_type": "Event",
+                                "document_number": "Document Number",
+                                "created_at": "Event Date",
+                            },
+                            height=300,
+                        )
+
+            with archive_tab:
+                if int(selected_record.get("is_archived", 0) or 0):
+                    st.info(
+                        "This record is archived. It remains available for audit and revision history."
+                    )
+                    with st.form(f"restore_document_{selected_record_id}"):
+                        restore_reviewer = st.text_input("Restored by *")
+                        restore_comments = st.text_area("Reason for restoration *")
+                        restore_submit = st.form_submit_button(
+                            "Restore document",
+                            type="primary",
+                            use_container_width=True,
+                        )
+                    if restore_submit:
+                        if not clean_text(restore_reviewer) or not clean_text(restore_comments):
+                            st.error("Restored by and Reason for restoration are required.")
+                        else:
+                            restore_document(
+                                selected_record_id,
+                                clean_text(restore_reviewer),
+                                clean_text(restore_comments),
+                            )
+                            st.session_state["flash_message"] = (
+                                "success",
+                                "The document was restored to the active register.",
+                            )
+                            st.rerun()
+                else:
+                    st.warning(
+                        "Archiving removes the record from the default active view, "
+                        "but keeps its metadata, PDFs and history."
+                    )
+                    with st.form(f"archive_document_{selected_record_id}"):
+                        archive_reviewer = st.text_input("Archived by *")
+                        archive_reason = st.text_area("Reason for archiving *")
+                        archive_confirmed = st.checkbox(
+                            "I understand the document will remain accessible in Archived records."
+                        )
+                        archive_submit = st.form_submit_button(
+                            "Archive document",
+                            use_container_width=True,
+                        )
+                    if archive_submit:
+                        if not archive_confirmed:
+                            st.error("Confirm that you want to archive this record.")
+                        elif not clean_text(archive_reviewer) or not clean_text(archive_reason):
+                            st.error("Archived by and Reason for archiving are required.")
+                        else:
+                            archive_documents(
+                                [selected_record_id],
+                                clean_text(archive_reviewer),
+                                clean_text(archive_reason),
+                            )
+                            st.session_state["flash_message"] = (
+                                "success",
+                                "The document was archived and remains available in history.",
+                            )
+                            st.rerun()
+
+
+# -----------------------------
+# Documents needing attention
+# -----------------------------
+
+elif page == "Documents needing attention":
+    render_section_header(
+        "Documents needing attention",
+        "Review clear document problems in one place. Internal system IDs and technical review logic remain hidden.",
+    )
+
+    attention_cases = open_review_cases_df.copy()
+
+    if attention_cases.empty:
+        st.success("No documents currently need attention.")
+    else:
+        priority_order = {"Critical": 0, "Warning": 1, "Review": 2}
+        attention_cases["_priority_order"] = (
+            attention_cases["severity"].map(priority_order).fillna(9)
+        )
+        attention_cases = attention_cases.sort_values(
+            ["_priority_order", "project", "document_number", "revision"]
+        ).drop(columns="_priority_order")
+
+        metric_columns = st.columns(4)
+        metric_columns[0].metric(
+            "Need attention",
+            len(attention_cases),
+        )
+        metric_columns[1].metric(
+            "Possible duplicates",
+            int(
+                attention_cases["issue_type"]
+                .map(normalized_key)
+                .eq("exact duplicate")
+                .sum()
+            ),
+        )
+        metric_columns[2].metric(
+            "Missing information",
+            int(
+                attention_cases["issue_type"]
+                .map(normalized_key)
+                .eq("missing metadata")
+                .sum()
+            ),
+        )
+        metric_columns[3].metric(
+            "Under review",
+            int(attention_cases["status"].eq("Under Review").sum()),
+        )
+
+        filter_one, filter_two, filter_three = st.columns(3)
+        with filter_one:
+            selected_priorities = st.multiselect(
+                "Priority",
+                sorted(attention_cases["severity"].dropna().astype(str).unique()),
+            )
+        with filter_two:
+            selected_problems = st.multiselect(
+                "Problem",
+                sorted(
+                    {
+                        attention_problem_label(value)
+                        for value in attention_cases["issue_type"].tolist()
+                    }
+                ),
+            )
+        with filter_three:
+            selected_projects = st.multiselect(
+                "Project",
+                sorted(
+                    value
+                    for value in attention_cases["project"].dropna().astype(str).unique()
+                    if clean_text(value)
+                ),
+            )
+
+        filtered_attention = attention_cases.copy()
+        if selected_priorities:
+            filtered_attention = filtered_attention[
+                filtered_attention["severity"].isin(selected_priorities)
+            ]
+        if selected_problems:
+            filtered_attention = filtered_attention[
+                filtered_attention["issue_type"].map(attention_problem_label).isin(
+                    selected_problems
+                )
+            ]
+        if selected_projects:
+            filtered_attention = filtered_attention[
+                filtered_attention["project"].isin(selected_projects)
+            ]
+
+        st.subheader("Actions required")
+        display_table(
+            attention_table(filtered_attention),
+            columns=[
+                "Priority",
+                "Problem",
+                "Document",
+                "Title",
+                "Project",
+                "Explanation",
+                "Next action",
+                "Review status",
+            ],
+            height=390,
+            row_height=42,
+            column_config={
+                "Priority": st.column_config.TextColumn(width="small"),
+                "Problem": st.column_config.TextColumn(width="medium"),
+                "Document": st.column_config.TextColumn(width="medium"),
+                "Title": st.column_config.TextColumn(width="large"),
+                "Explanation": st.column_config.TextColumn(width="large"),
+                "Next action": st.column_config.TextColumn(width="large"),
+            },
+            key="attention_table",
+        )
+
+        if filtered_attention.empty:
+            st.info("No documents match the selected filters.")
+        else:
+            st.divider()
+            st.subheader("Review one item")
+            case_choices = build_review_case_choice_map(filtered_attention)
+            selected_case_label = st.selectbox(
+                "Select a document issue",
+                list(case_choices.keys()),
+            )
+            selected_case_id = case_choices[selected_case_label]
+            case_row = attention_cases[
+                attention_cases["id"] == selected_case_id
+            ].iloc[0]
+            related_ids = decode_related_ids(case_row.get("related_document_ids", ""))
+            case_documents = all_documents_df[
+                all_documents_df["id"].isin(related_ids)
+            ].copy()
+
+            st.markdown(
+                f"### {attention_problem_label(case_row.get('issue_type', ''))}"
+            )
+            st.write(
+                f"**Document:** {clean_text(case_row.get('document_number', '')) or 'Not set'}"
+                + (
+                    f" Rev {clean_text(case_row.get('revision', ''))}"
+                    if clean_text(case_row.get("revision", ""))
+                    else ""
+                )
+            )
+            st.write(
+                f"**What was found:** {clean_text(case_row.get('issue_summary', ''))}"
+            )
+            st.write(
+                f"**What to do:** {attention_action(case_row.get('issue_type', ''))}"
+            )
+
+            if not case_documents.empty:
+                display_table(
+                    case_documents,
+                    columns=[
+                        "document_number",
+                        "title",
+                        "revision",
+                        "status",
+                        "project",
+                        "discipline",
+                        "originator",
+                        "created_date",
+                        "pdf_count",
+                        "is_archived",
+                    ],
+                    rename={
+                        "document_number": "Document Number",
+                        "revision": "Revision",
+                        "status": "Official Status",
+                        "created_date": "Date Received",
+                        "pdf_count": "PDF Files",
+                        "is_archived": "Archived",
+                    },
+                    height=230,
+                )
+
+                with st.expander("Open related PDFs", expanded=False):
+                    for position, (_, document_row) in enumerate(
+                        case_documents.iterrows(), start=1
+                    ):
+                        st.markdown(
+                            f"**{clean_text(document_row.get('document_number', ''))} "
+                            f"Rev {clean_text(document_row.get('revision', '')) or 'Not set'}**"
+                        )
+                        files = get_document_files(document_id=int(document_row["id"]))
+                        render_attached_files(
+                            files,
+                            key_prefix=f"attention_{selected_case_id}_{position}",
+                            allow_delete=False,
+                        )
+
+                with st.expander("Correct metadata", expanded=False):
+                    correction_choices = build_record_choice_map(case_documents)
+                    correction_label = st.selectbox(
+                        "Record to correct",
+                        list(correction_choices.keys()),
+                        key=f"attention_correction_record_{selected_case_id}",
+                    )
+                    correction_id = correction_choices[correction_label]
+                    correction_row = case_documents[
+                        case_documents["id"] == correction_id
+                    ].iloc[0]
+                    discipline_options, discipline_index = select_options_with_current(
+                        DISCIPLINE_OPTIONS, correction_row.get("discipline", "")
+                    )
+                    status_options, status_index = select_options_with_current(
+                        STATUS_OPTIONS, correction_row.get("status", "")
+                    )
+
+                    with st.form(f"attention_correction_{selected_case_id}_{correction_id}"):
+                        left, right = st.columns(2)
+                        with left:
+                            corrected_number = st.text_input(
+                                "Document Number *",
+                                value=clean_text(correction_row.get("document_number", "")),
+                            )
+                            corrected_title = st.text_input(
+                                "Document Title *",
+                                value=clean_text(correction_row.get("title", "")),
+                            )
+                            corrected_revision = st.text_input(
+                                "Revision *",
+                                value=clean_text(correction_row.get("revision", "")),
+                            )
+                            corrected_status = st.selectbox(
+                                "Official document status *",
+                                status_options,
+                                index=status_index,
+                            )
+                        with right:
+                            corrected_project = st.text_input(
+                                "Project *",
+                                value=clean_text(correction_row.get("project", "")),
+                            )
+                            corrected_discipline = st.selectbox(
+                                "Discipline *",
+                                discipline_options,
+                                index=discipline_index,
+                            )
+                            corrected_originator = st.text_input(
+                                "Originator",
+                                value=clean_text(correction_row.get("originator", "")),
+                            )
+                            corrected_received = st.date_input(
+                                "Date received",
+                                value=optional_date_value(
+                                    correction_row.get("created_date", "")
+                                ),
+                            )
+
+                        corrected_owner = st.text_input(
+                            "Owner",
+                            value=clean_text(correction_row.get("owner", "")),
+                        )
+                        corrected_notes = st.text_area(
+                            "Notes",
+                            value=clean_text(correction_row.get("notes", "")),
+                        )
+                        correction_reviewer = st.text_input("Corrected by *")
+                        correction_comments = st.text_area("Correction reason *")
+                        correction_submit = st.form_submit_button(
+                            "Correct document",
+                            type="primary",
+                            use_container_width=True,
+                        )
+
+                    if correction_submit:
+                        required_values = [
+                            corrected_number,
+                            corrected_title,
+                            corrected_revision,
+                            corrected_status,
+                            corrected_project,
+                            corrected_discipline,
+                        ]
+                        if not all(clean_text(value) for value in required_values):
+                            st.error("Complete all essential document information.")
+                        elif not clean_text(correction_reviewer) or not clean_text(correction_comments):
+                            st.error("Corrected by and Correction reason are required.")
+                        else:
+                            updates = {
+                                "document_number": clean_text(corrected_number),
+                                "title": clean_text(corrected_title),
+                                "revision": clean_text(corrected_revision),
+                                "status": clean_text(corrected_status),
+                                "project": clean_text(corrected_project),
+                                "discipline": clean_text(corrected_discipline),
+                                "originator": clean_text(corrected_originator),
+                                "owner": clean_text(corrected_owner),
+                                "created_date": str(corrected_received) if corrected_received else "",
+                                "due_date": clean_text(correction_row.get("due_date", "")),
+                                "file_name": clean_text(correction_row.get("file_name", "")),
+                                "notes": clean_text(corrected_notes),
+                            }
+                            update_document_details(
+                                correction_id,
+                                updates,
+                                clean_text(correction_reviewer),
+                                clean_text(correction_comments),
+                                selected_case_id,
+                            )
+                            record_review_decision(
+                                selected_case_id,
+                                "Correction completed",
+                                "Under Review",
+                                clean_text(correction_reviewer),
+                                clean_text(correction_comments),
+                                {"corrected_document_id": correction_id},
+                            )
+                            st.session_state["flash_message"] = (
+                                "success",
+                                "The metadata was corrected. Approve the case when the issue is resolved.",
+                            )
+                            st.rerun()
+
+            with st.form(f"attention_action_{selected_case_id}", border=True):
+                action_options = ["Review", "Approve"]
+                if normalized_key(case_row.get("issue_type", "")) == "exact duplicate":
+                    action_options.extend(["Not a duplicate", "Archive duplicate"])
+                selected_action = st.radio(
+                    "Action",
+                    action_options,
+                    horizontal=True,
+                )
+
+                archive_document_id = None
+                if selected_action == "Archive duplicate" and not case_documents.empty:
+                    archive_choices = build_record_choice_map(
+                        case_documents[
+                            pd.to_numeric(
+                                case_documents["is_archived"], errors="coerce"
+                            ).fillna(0)
+                            == 0
+                        ]
+                    )
+                    if archive_choices:
+                        archive_label = st.selectbox(
+                            "Document copy to archive",
+                            list(archive_choices.keys()),
+                        )
+                        archive_document_id = archive_choices[archive_label]
+
+                reviewer = st.text_input("Completed by *")
+                comments = st.text_area(
+                    "Comments *",
+                    placeholder="Explain what you checked and why this action is correct.",
+                )
+                action_submit = st.form_submit_button(
+                    "Save action",
+                    type="primary",
+                    use_container_width=True,
+                )
+
+            if action_submit:
+                if not clean_text(reviewer) or not clean_text(comments):
+                    st.error("Completed by and Comments are required.")
+                elif selected_action == "Archive duplicate" and archive_document_id is None:
+                    st.error("Select the duplicate record to archive.")
+                else:
+                    if selected_action == "Review":
+                        decision = "Start Review"
+                        case_status = "Under Review"
+                    elif selected_action == "Approve":
+                        decision = "Approved"
+                        case_status = "Resolved"
+                    elif selected_action == "Not a duplicate":
+                        decision = "Not a Duplicate"
+                        case_status = "Resolved"
+                    else:
+                        archive_documents(
+                            [archive_document_id],
+                            clean_text(reviewer),
+                            clean_text(comments),
+                            selected_case_id,
+                        )
+                        decision = "Duplicate Archived"
+                        case_status = "Resolved"
+
+                    record_review_decision(
+                        selected_case_id,
+                        decision,
+                        case_status,
+                        clean_text(reviewer),
+                        clean_text(comments),
+                        {
+                            "related_document_ids": related_ids,
+                            "archived_document_id": archive_document_id,
+                        },
+                    )
+                    st.session_state["flash_message"] = (
+                        "success",
+                        "The review action was saved to the audit history.",
+                    )
+                    st.rerun()
 
 
 # -----------------------------
